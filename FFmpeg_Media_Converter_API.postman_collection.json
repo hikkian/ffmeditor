@@ -1,0 +1,176 @@
+{
+  "info": {
+    "name": "FFmpeg Media Converter API",
+    "description": "Complete API collection for FFmpeg Media Converter backend",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8080/api/v1/health",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["api", "v1", "health"]
+        },
+        "description": "Check if backend is running"
+      }
+    },
+    {
+      "name": "Upload File",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "file",
+              "type": "file",
+              "src": [],
+              "disabled": false
+            }
+          ]
+        },
+        "url": {
+          "raw": "http://localhost:8080/api/v1/upload",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["api", "v1", "upload"]
+        },
+        "description": "Upload a media file. Returns file_id for use in convert endpoint."
+      }
+    },
+    {
+      "name": "Start Conversion - MP4 H.264",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"file_id\": \"PASTE_FILE_ID_HERE\",\n  \"output_format\": \"mp4\",\n  \"video_codec\": \"libx264\",\n  \"audio_codec\": \"aac\",\n  \"crf\": 28,\n  \"preset\": \"fast\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8080/api/v1/convert",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["api", "v1", "convert"]
+        },
+        "description": "Start conversion to MP4 with H.264 codec. Returns job_id."
+      }
+    },
+    {
+      "name": "Start Conversion - WebM VP9",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"file_id\": \"PASTE_FILE_ID_HERE\",\n  \"output_format\": \"webm\",\n  \"video_codec\": \"libvpx-vp9\",\n  \"audio_codec\": \"libopus\",\n  \"preset\": \"veryfast\",\n  \"crf\": 28\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8080/api/v1/convert",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["api", "v1", "convert"]
+        },
+        "description": "Start conversion to WebM with VP9 codec (low CPU)."
+      }
+    },
+    {
+      "name": "Start Conversion - Extract Audio (MP3)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"file_id\": \"PASTE_FILE_ID_HERE\",\n  \"output_format\": \"mp3\",\n  \"remove_video\": true,\n  \"audio_codec\": \"libmp3lame\",\n  \"audio_bitrate\": \"192k\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8080/api/v1/convert",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["api", "v1", "convert"]
+        },
+        "description": "Extract audio as MP3 (removes video)."
+      }
+    },
+    {
+      "name": "Start Conversion - Resize & Trim",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"file_id\": \"PASTE_FILE_ID_HERE\",\n  \"output_format\": \"mp4\",\n  \"video_codec\": \"libx264\",\n  \"audio_codec\": \"aac\",\n  \"resize_width\": 1280,\n  \"resize_height\": 720,\n  \"keep_aspect\": true,\n  \"fit_mode\": \"contain\",\n  \"trim_start\": 10.5,\n  \"trim_duration\": 60.0,\n  \"crf\": 28,\n  \"preset\": \"fast\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8080/api/v1/convert",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["api", "v1", "convert"]
+        },
+        "description": "Convert with resize (1280x720 with letterbox) and trim (start at 10.5s, 60s duration)."
+      }
+    },
+    {
+      "name": "Get Job Status",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8080/api/v1/jobs/PASTE_JOB_ID_HERE",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["api", "v1", "jobs", "PASTE_JOB_ID_HERE"]
+        },
+        "description": "Get full job status including progress (0.0-1.0), logs, and error details."
+      }
+    },
+    {
+      "name": "Download Converted File",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8080/api/v1/download/PASTE_JOB_ID_HERE",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8080",
+          "path": ["api", "v1", "download", "PASTE_JOB_ID_HERE"]
+        },
+        "description": "Download the converted file. Save with output_filename from job status."
+      }
+    }
+  ]
+}
