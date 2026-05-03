@@ -8,7 +8,7 @@ import (
 
 var (
 	AllowedInputFormats  = map[string]bool{"mp4": true, "mkv": true, "mov": true, "webm": true, "mp3": true, "aac": true, "wav": true, "flac": true, "ogg": true, "avi": true, "m4a": true}
-	AllowedOutputFormats = map[string]bool{"mp4": true, "mkv": true, "mov": true, "webm": true, "mp3": true, "aac": true, "wav": true, "flac": true, "ogg": true, "m4a": true}
+	AllowedOutputFormats = map[string]bool{"mp4": true, "mkv": true, "mov": true, "webm": true, "mp3": true, "aac": true, "wav": true, "flac": true, "ogg": true, "m4a": true, "avi": true}
 	AllowedVideoCodecs   = map[string]bool{"copy": true, "libx264": true, "libx265": true, "libvpx-vp9": true}
 	AllowedAudioCodecs   = map[string]bool{"copy": true, "aac": true, "libmp3lame": true, "libopus": true, "flac": true}
 	AllowedPresets       = map[string]bool{"ultrafast": true, "superfast": true, "veryfast": true, "faster": true, "fast": true, "medium": true, "slow": true, "slower": true, "veryslow": true}
@@ -36,6 +36,9 @@ type ConvertRequest struct {
 	FitMode       *string  `json:"fit_mode"`
 	FastStart     bool     `json:"fast_start"`
 	StripMetadata bool     `json:"strip_metadata"`
+	Brightness    *float64 `json:"brightness"`
+	Contrast      *float64 `json:"contrast"`
+	Volume        *float64 `json:"volume"`
 }
 
 func (r *ConvertRequest) Validate() error {
@@ -77,6 +80,24 @@ func (r *ConvertRequest) Validate() error {
 	}
 	if r.FitMode != nil && !AllowedFitModes[*r.FitMode] {
 		return fmt.Errorf("fit_mode not allowed: %s", *r.FitMode)
+	}
+	return nil
+}
+
+type MergeRequest struct {
+	FileIDs      []string `json:"file_ids"`
+	OutputFormat string   `json:"output_format"`
+}
+
+func (r *MergeRequest) Validate() error {
+	if len(r.FileIDs) < 2 {
+		return fmt.Errorf("at least 2 file_ids required for merging")
+	}
+	if r.OutputFormat == "" {
+		return fmt.Errorf("output_format is required")
+	}
+	if !AllowedOutputFormats[strings.ToLower(r.OutputFormat)] {
+		return fmt.Errorf("output_format not allowed: %s", r.OutputFormat)
 	}
 	return nil
 }

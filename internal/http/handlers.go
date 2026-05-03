@@ -39,8 +39,10 @@ func (h *Handler) RegisterRoutes(app *fiber.App) {
 
 	api.Post("/upload", h.Upload)
 	api.Post("/convert", h.Convert)
+	api.Post("/merge", h.Merge)
 	api.Get("/jobs/:id", h.GetJob)
 	api.Get("/download/:id", h.Download)
+	api.Delete("/files/:id", h.DeleteFile)
 	api.Get("/health", h.Health)
 }
 
@@ -107,9 +109,17 @@ func (h *Handler) Upload(c *fiber.Ctx) error {
 	defer cancel()
 
 	var mediaInfo *storage.MediaInfo
-	if duration, err := ffmpeg.ProbeInput(ctx, h.cfg.FFprobePath, storagePath); err == nil {
+	if fullInfo, err := ffmpeg.GetMediaInfo(ctx, h.cfg.FFprobePath, storagePath); err == nil {
+		duration := 0.0
+		if fullInfo.Duration != nil {
+			duration = *fullInfo.Duration
+		}
 		mediaInfo = &storage.MediaInfo{
-			Duration: &duration,
+			Duration:   &duration,
+			VideoCodec: fullInfo.VideoCodec,
+			AudioCodec: fullInfo.AudioCodec,
+			HasVideo:   fullInfo.HasVideo,
+			HasAudio:   fullInfo.HasAudio,
 		}
 	} else {
 		mediaInfo = &storage.MediaInfo{}
@@ -129,7 +139,11 @@ func (h *Handler) Upload(c *fiber.Ctx) error {
 		"file_id":       fileID,
 		"original_name": originalName,
 		"media_info": fiber.Map{
-			"duration": mediaInfo.Duration,
+			"duration":    mediaInfo.Duration,
+			"has_video":   mediaInfo.HasVideo,
+			"has_audio":   mediaInfo.HasAudio,
+			"video_codec": mediaInfo.VideoCodec,
+			"audio_codec": mediaInfo.AudioCodec,
 		},
 	})
 }
@@ -201,6 +215,9 @@ func (h *Handler) performConvert(job *jobs.Job, uf *storage.UploadedFile, req *v
 		FastStart:     req.FastStart,
 		StripMetadata: req.StripMetadata,
 		PresetMode:    h.cfg.PresetMode,
+		Brightness:    req.Brightness,
+		Contrast:      req.Contrast,
+		Volume:        req.Volume,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
@@ -218,6 +235,81 @@ func (h *Handler) performConvert(job *jobs.Job, uf *storage.UploadedFile, req *v
 	}
 
 	h.jobManager.AddLog(job.ID, "Conversion completed successfully")
+	h.jobManager.SetCompleted(job.ID, outputName)
+}
+
+// Merge starts a merge job
+func (h *Handler) Merge(c *fiber.Ctx) error {
+	var req validator.MergeRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{
+			"error": "Invalid request body",
+		})
+	}
+
+	if err := req.Validate(); err != nil {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{
+			"error": err.Error(),
+		})
+	}
+
+	var inputPaths []string
+	var duration float64
+	for _, id := range req.FileIDs {
+		uf := h.storage.Get(id)
+		if uf == nil {
+			return c.Status(http.StatusNotFound).JSON(fiber.Map{
+				"error": fmt.Sprintf("File %s not found", id),
+			})
+		}
+		inputPaths = append(inputPaths, uf.StoragePath)
+		if uf.MediaInfo != nil && uf.MediaInfo.Duration != nil {
+			duration += *uf.MediaInfo.Duration
+		}
+	}
+
+	// Create job using the first file's ID as anchor
+	job := h.jobManager.CreateJob(req.FileIDs[0], "Merged_Video", req.OutputFormat)
+
+	go h.performMerge(job, inputPaths, duration, &req)
+
+	return c.Status(http.StatusOK).JSON(fiber.Map{
+		"job_id": job.ID,
+		"status": job.Status,
+	})
+}
+
+func (h *Handler) performMerge(job *jobs.Job, inputPaths []string, totalDuration float64, req *validator.MergeRequest) {
+	h.jobManager.AddLog(job.ID, "Starting merge...")
+	h.jobManager.SetStatus(job.ID, jobs.StatusProcessing)
+
+	outputName := fmt.Sprintf("%s_merged.%s", job.ID[:8], req.OutputFormat)
+	outputPath := filepath.Join(h.cfg.OutputDir, outputName)
+
+	opts := ffmpeg.MergeOptions{
+		InputPaths:  inputPaths,
+		OutputPath:  outputPath,
+		FFmpegPath:  h.cfg.FFmpegPath,
+		FFprobePath: h.cfg.FFprobePath,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
+	defer cancel()
+
+	progressHandler := func(current, total, outTimeMs float64) {
+		if totalDuration > 0 {
+			pct := (outTimeMs / 1000.0) / totalDuration
+			h.jobManager.SetProgress(job.ID, pct, outTimeMs)
+		}
+	}
+
+	if err := ffmpeg.Merge(ctx, opts, progressHandler); err != nil {
+		h.jobManager.AddLog(job.ID, fmt.Sprintf("Error: %v", err))
+		h.jobManager.SetError(job.ID, err.Error())
+		return
+	}
+
+	h.jobManager.AddLog(job.ID, "Merge completed successfully")
 	h.jobManager.SetCompleted(job.ID, outputName)
 }
 
@@ -264,6 +356,27 @@ func (h *Handler) Download(c *fiber.Ctx) error {
 func (h *Handler) Health(c *fiber.Ctx) error {
 	return c.Status(http.StatusOK).JSON(fiber.Map{
 		"status": "ok",
+	})
+}
+
+// DeleteFile removes a file from storage and disk
+func (h *Handler) DeleteFile(c *fiber.Ctx) error {
+	fileID := c.Params("id")
+	uf := h.storage.Get(fileID)
+	if uf == nil {
+		return c.Status(http.StatusNotFound).JSON(fiber.Map{
+			"error": "File not found",
+		})
+	}
+
+	// Delete from disk
+	os.Remove(uf.StoragePath)
+
+	// Remove from storage
+	h.storage.Delete(fileID)
+
+	return c.Status(http.StatusOK).JSON(fiber.Map{
+		"success": true,
 	})
 }
 
