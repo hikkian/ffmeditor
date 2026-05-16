@@ -1,0 +1,43 @@
+# Go
+ffmeditor-server
+ffmeditor-server.exe
+*.exe
+*.test
+*.out
+
+# Uploads and outputs (runtime data)
+uploads/
+outputs/
+
+# Test media
+tests/*.mp4
+tests/*.mkv
+tests/*.mov
+tests/*.avi
+tests/*.webm
+tests/*.mp3
+tests/*.wav
+
+# Benchmark results
+benchmark_results/
+
+# Environment
+.env
+.env.local
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Docker
+.dockerignore
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

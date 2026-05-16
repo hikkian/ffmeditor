@@ -1,0 +1,6 @@
+# Normalize line endings to LF everywhere
+* text=auto eol=lf
+
+# Windows scripts keep CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
