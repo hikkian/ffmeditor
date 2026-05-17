@@ -6,6 +6,7 @@ const FORMATS = ['mp4', 'mkv', 'mov', 'webm', 'mp3', 'aac', 'wav', 'flac', 'ogg'
 const VIDEO_CODECS = ['copy', 'libx264', 'libx265', 'libvpx-vp9'];
 const AUDIO_CODECS = ['copy', 'aac', 'libmp3lame', 'libopus', 'flac'];
 const PRESETS = ['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium', 'slow', 'slower', 'veryslow'];
+const AUDIO_ONLY_FORMATS = new Set(['mp3', 'aac', 'wav', 'flac', 'ogg', 'm4a']);
 
 function SelectField({ id, label, value, onChange, options }) {
   return (
@@ -171,6 +172,7 @@ export default function EditingControls() {
   const setContrast     = useStore((s) => s.setContrast);
   const setVolume       = useStore((s) => s.setVolume);
   const handleExport    = useStore((s) => s.handleExport);
+  const audioOnlyFormat = AUDIO_ONLY_FORMATS.has(String(outputFormat || '').toLowerCase());
 
   const [systemMetrics, setSystemMetrics] = useState(null);
 
@@ -221,9 +223,9 @@ export default function EditingControls() {
     ? `${systemMetrics.ram_used_mb.toFixed(0)} / ${systemMetrics.ram_total_mb.toFixed(0)} MB`
     : 'N/A';
   const gpuUsed = systemMetrics?.gpu
-    ? systemMetrics.gpu.util_percent >= 0
+    ? systemMetrics.gpu.available && systemMetrics.gpu.util_percent >= 0
       ? `${systemMetrics.gpu.util_percent.toFixed(0)}%`
-      : (systemMetrics.gpu.name || 'available')
+      : 'Not detected'
     : 'N/A';
 
   return (
@@ -333,9 +335,17 @@ export default function EditingControls() {
           icon={<svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" /></svg>}
         >
           <SelectField id="output-format-select" label="Format" value={outputFormat} onChange={setOutputFormat} options={FORMATS} />
-          <SelectField id="video-codec-select" label="Video Codec" value={videoCodec} onChange={setVideoCodec} options={VIDEO_CODECS} />
-          <SelectField id="audio-codec-select" label="Audio Codec" value={audioCodec} onChange={setAudioCodec} options={AUDIO_CODECS} />
-          <SelectField id="preset-select" label="Preset" value={preset} onChange={setPreset} options={PRESETS} />
+          {audioOnlyFormat ? (
+            <div className="rounded-lg border px-3 py-2 text-xs" style={{ background: 'rgba(34,197,94,0.06)', borderColor: 'rgba(34,197,94,0.15)', color: 'var(--color-text-secondary)' }}>
+              Audio-only output ignores video codec, resize, and video quality settings.
+            </div>
+          ) : (
+            <>
+              <SelectField id="video-codec-select" label="Video Codec" value={videoCodec} onChange={setVideoCodec} options={VIDEO_CODECS} />
+              <SelectField id="audio-codec-select" label="Audio Codec" value={audioCodec} onChange={setAudioCodec} options={AUDIO_CODECS} />
+              <SelectField id="preset-select" label="Preset" value={preset} onChange={setPreset} options={PRESETS} />
+            </>
+          )}
         </Section>
 
         <Divider />

@@ -25,13 +25,15 @@ type Handler struct {
 	cfg        *config.Config
 	storage    *storage.Storage
 	jobManager *jobs.Manager
+	opStore    *metrics.OperationStore
 }
 
-func NewHandler(cfg *config.Config, store *storage.Storage, jm *jobs.Manager) *Handler {
+func NewHandler(cfg *config.Config, store *storage.Storage, jm *jobs.Manager, opStore *metrics.OperationStore) *Handler {
 	return &Handler{
 		cfg:        cfg,
 		storage:    store,
 		jobManager: jm,
+		opStore:    opStore,
 	}
 }
 
@@ -48,6 +50,8 @@ func (h *Handler) RegisterRoutes(app *fiber.App) {
 	api.Get("/files/:id/waveform", h.GetFileWaveform)
 	api.Delete("/files/:id", h.DeleteFile)
 	api.Get("/metrics/system/current", h.MetricsSystem)
+	api.Get("/metrics/operations", h.MetricsOperations)
+	api.Get("/metrics/summary", h.MetricsSummary)
 	api.Get("/health", h.Health)
 }
 
@@ -195,6 +199,8 @@ func (h *Handler) Convert(c *fiber.Ctx) error {
 }
 
 func (h *Handler) performConvert(job *jobs.Job, uf *storage.UploadedFile, req *validator.ConvertRequest) {
+	start := time.Now()
+	sampler := metrics.NewSampler()
 	h.jobManager.AddLog(job.ID, "Starting conversion...")
 
 	// Generate output filename
@@ -231,6 +237,23 @@ func (h *Handler) performConvert(job *jobs.Job, uf *storage.UploadedFile, req *v
 		Volume:        req.Volume,
 	}
 
+	if isAudioOnlyOutputFormat(req.OutputFormat) {
+		opts.RemoveVideo = true
+		opts.RemoveAudio = false
+		opts.VideoCodec = nil
+		opts.VideoBitrate = nil
+		opts.CRF = nil
+		opts.FPS = nil
+		opts.Preset = nil
+		opts.ResizeWidth = nil
+		opts.ResizeHeight = nil
+		opts.KeepAspect = false
+		opts.FitMode = nil
+		opts.FastStart = false
+		opts.Brightness = nil
+		opts.Contrast = nil
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()
 
@@ -239,12 +262,50 @@ func (h *Handler) performConvert(job *jobs.Job, uf *storage.UploadedFile, req *v
 		h.jobManager.SetProgress(job.ID, current, outTimeMs)
 	}
 
-	if err := ffmpeg.Convert(ctx, opts, progressHandler); err != nil {
-		h.jobManager.AddLog(job.ID, fmt.Sprintf("Error: %v", err))
-		h.jobManager.SetError(job.ID, err.Error())
-		return
+	convertErr := ffmpeg.Convert(ctx, opts, progressHandler)
+	elapsed := time.Since(start).Seconds()
+	avgCPU, peakRAM := sampler.Stop()
+
+	inMB := fileSizeMB(uf.StoragePath)
+	outMB := 0.0
+	if convertErr == nil {
+		outMB = fileSizeMB(outputPath)
+	}
+	var videoDur float64
+	if req.TrimDuration != nil {
+		videoDur = *req.TrimDuration
+	} else if uf.MediaInfo != nil && uf.MediaInfo.Duration != nil {
+		videoDur = *uf.MediaInfo.Duration
+	}
+	speedRatio := 0.0
+	if elapsed > 0 && videoDur > 0 {
+		speedRatio = videoDur / elapsed
 	}
 
+	snap := metrics.Current()
+	h.opStore.Record(metrics.OperationRecord{
+		OperationID:       job.ID,
+		Operation:         "convert",
+		ProcessingTimeSec: elapsed,
+		InputSizeMB:       inMB,
+		OutputSizeMB:      outMB,
+		SpeedRatio:        speedRatio,
+		FFmpegSpeed:       -1,
+		FFmpegFPS:         -1,
+		AvgCPUPercent:     avgCPU,
+		PeakRAMMB:         peakRAM,
+		OutputFormat:      req.OutputFormat,
+		Strategy:          "reencode",
+		Success:           convertErr == nil,
+		Error:             errStr(convertErr),
+		GPUUsed:           snap.GPU != nil,
+	})
+
+	if convertErr != nil {
+		h.jobManager.AddLog(job.ID, fmt.Sprintf("Error: %v", convertErr))
+		h.jobManager.SetError(job.ID, convertErr.Error())
+		return
+	}
 	h.jobManager.AddLog(job.ID, "Conversion completed successfully")
 	h.jobManager.SetCompleted(job.ID, outputName)
 }
@@ -299,6 +360,7 @@ func (h *Handler) Merge(c *fiber.Ctx) error {
 
 func (h *Handler) performMerge(job *jobs.Job, inputPaths []string, totalDuration float64, req *validator.MergeRequest) {
 	start := time.Now()
+	sampler := metrics.NewSampler()
 	h.jobManager.AddLog(job.ID, "Starting merge...")
 
 	outputName := fmt.Sprintf("%s_merged.%s", job.ID[:8], req.OutputFormat)
@@ -332,14 +394,48 @@ func (h *Handler) performMerge(job *jobs.Job, inputPaths []string, totalDuration
 		}
 	}
 
-	if err := ffmpeg.Merge(ctx, opts, progressHandler); err != nil {
-		h.jobManager.AddLog(job.ID, fmt.Sprintf("Error: %v", err))
-		h.jobManager.SetError(job.ID, err.Error())
-		return
+	mergeErr := ffmpeg.Merge(ctx, opts, progressHandler)
+	elapsed := time.Since(start).Seconds()
+	avgCPU, peakRAM := sampler.Stop()
+
+	var inMB, outMB float64
+	for _, p := range inputPaths {
+		inMB += fileSizeMB(p)
+	}
+	if mergeErr == nil {
+		outMB = fileSizeMB(outputPath)
+	}
+	speedRatio := 0.0
+	if elapsed > 0 && totalDuration > 0 {
+		speedRatio = totalDuration / elapsed
 	}
 
+	snap := metrics.Current()
+	h.opStore.Record(metrics.OperationRecord{
+		OperationID:       job.ID,
+		Operation:         "merge",
+		ProcessingTimeSec: elapsed,
+		InputSizeMB:       inMB,
+		OutputSizeMB:      outMB,
+		SpeedRatio:        speedRatio,
+		FFmpegSpeed:       -1,
+		FFmpegFPS:         -1,
+		AvgCPUPercent:     avgCPU,
+		PeakRAMMB:         peakRAM,
+		OutputFormat:      req.OutputFormat,
+		Strategy:          strategy,
+		Success:           mergeErr == nil,
+		Error:             errStr(mergeErr),
+		GPUUsed:           snap.GPU != nil,
+	})
+
+	if mergeErr != nil {
+		h.jobManager.AddLog(job.ID, fmt.Sprintf("Error: %v", mergeErr))
+		h.jobManager.SetError(job.ID, mergeErr.Error())
+		return
+	}
 	h.jobManager.SetStage(job.ID, "done")
-	h.jobManager.AddLog(job.ID, fmt.Sprintf("Completed in %.1fs (strategy: %s)", time.Since(start).Seconds(), strategy))
+	h.jobManager.AddLog(job.ID, fmt.Sprintf("Completed in %.1fs (strategy: %s)", elapsed, strategy))
 	h.jobManager.AddLog(job.ID, "Merge completed successfully")
 	h.jobManager.SetCompleted(job.ID, outputName)
 }
@@ -460,8 +556,24 @@ func (h *Handler) TimelineExport(c *fiber.Ctx) error {
 	})
 }
 
+func fileSizeMB(path string) float64 {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return float64(info.Size()) / (1024 * 1024)
+}
+
+func errStr(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 func (h *Handler) performTimelineExport(job *jobs.Job, clips []ffmpeg.TimelineExportClip, req *validator.TimelineExportRequest) {
 	start := time.Now()
+	sampler := metrics.NewSampler()
 	h.jobManager.AddLog(job.ID, "Timeline export started")
 
 	outputName := fmt.Sprintf("%s_export.%s", job.ID[:8], req.OutputFormat)
@@ -492,6 +604,22 @@ func (h *Handler) performTimelineExport(job *jobs.Job, clips []ffmpeg.TimelineEx
 		HWEncoder:    h.cfg.ResolvedHWEncoder,
 	}
 
+	if isAudioOnlyOutputFormat(req.OutputFormat) {
+		opts.RemoveVideo = true
+		opts.RemoveAudio = false
+		opts.VideoCodec = nil
+		opts.VideoBitrate = nil
+		opts.CRF = nil
+		opts.Preset = nil
+		opts.ResizeWidth = nil
+		opts.ResizeHeight = nil
+		opts.KeepAspect = false
+		opts.FitMode = nil
+		opts.Brightness = nil
+		opts.Contrast = nil
+		opts.HWEncoder = ""
+	}
+
 	strategy := "stream_copy"
 	if !ffmpeg.CanStreamCopy(opts) {
 		strategy = "reencode"
@@ -511,15 +639,58 @@ func (h *Handler) performTimelineExport(job *jobs.Job, clips []ffmpeg.TimelineEx
 		h.jobManager.AddLog(job.ID, "→ "+stage)
 	}
 
-	if err := ffmpeg.TimelineExport(ctx, opts, progressHandler, stageHandler); err != nil {
-		h.jobManager.AddLog(job.ID, "Error: "+err.Error())
-		h.jobManager.SetError(job.ID, err.Error())
-		return
+	exportErr := ffmpeg.TimelineExport(ctx, opts, progressHandler, stageHandler)
+	elapsed := time.Since(start).Seconds()
+	avgCPU, peakRAM := sampler.Stop()
+
+	var inMB, outMB, totalDur float64
+	for _, cl := range clips {
+		inMB += fileSizeMB(cl.FilePath)
+		totalDur += cl.Duration
+	}
+	if exportErr == nil {
+		outMB = fileSizeMB(outputPath)
+	}
+	speedRatio := 0.0
+	if elapsed > 0 && totalDur > 0 {
+		speedRatio = totalDur / elapsed
 	}
 
-	elapsed := time.Since(start).Seconds()
+	snap := metrics.Current()
+	h.opStore.Record(metrics.OperationRecord{
+		OperationID:       job.ID,
+		Operation:         "timeline_export",
+		ProcessingTimeSec: elapsed,
+		InputSizeMB:       inMB,
+		OutputSizeMB:      outMB,
+		SpeedRatio:        speedRatio,
+		FFmpegSpeed:       -1,
+		FFmpegFPS:         -1,
+		AvgCPUPercent:     avgCPU,
+		PeakRAMMB:         peakRAM,
+		OutputFormat:      req.OutputFormat,
+		Strategy:          strategy,
+		Success:           exportErr == nil,
+		Error:             errStr(exportErr),
+		GPUUsed:           snap.GPU != nil,
+	})
+
+	if exportErr != nil {
+		h.jobManager.AddLog(job.ID, "Error: "+exportErr.Error())
+		h.jobManager.SetError(job.ID, exportErr.Error())
+		return
+	}
 	h.jobManager.AddLog(job.ID, fmt.Sprintf("Completed in %.1fs (strategy: %s)", elapsed, strategy))
 	h.jobManager.SetCompleted(job.ID, outputName)
+}
+
+func isAudioOnlyOutputFormat(format string) bool {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "mp3", "aac", "wav", "flac", "ogg", "m4a":
+		return true
+	default:
+		return false
+	}
 }
 
 // CancelJob aborts a running job.
@@ -540,6 +711,20 @@ func (h *Handler) CancelJob(c *fiber.Ctx) error {
 // MetricsSystem returns a cached system snapshot (CPU, RAM, GPU).
 func (h *Handler) MetricsSystem(c *fiber.Ctx) error {
 	return c.Status(http.StatusOK).JSON(metrics.Current())
+}
+
+// MetricsOperations returns persisted operation records for the performance panel.
+func (h *Handler) MetricsOperations(c *fiber.Ctx) error {
+	ops := h.opStore.All()
+	return c.Status(http.StatusOK).JSON(fiber.Map{
+		"operations": ops,
+	})
+}
+
+// MetricsSummary returns an aggregate view over all persisted operations.
+func (h *Handler) MetricsSummary(c *fiber.Ctx) error {
+	sum := h.opStore.Summary()
+	return c.Status(http.StatusOK).JSON(sum)
 }
 
 // Health returns server health status

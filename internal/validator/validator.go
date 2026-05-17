@@ -167,6 +167,10 @@ func (r *MergeRequest) Validate() error {
 	if !AllowedOutputFormats[strings.ToLower(r.OutputFormat)] {
 		return fmt.Errorf("output_format not allowed: %s", r.OutputFormat)
 	}
+	switch strings.ToLower(r.OutputFormat) {
+	case "mp3", "aac", "wav", "flac", "ogg", "m4a":
+		return fmt.Errorf("merge does not support audio-only output format: %s", r.OutputFormat)
+	}
 	return nil
 }
 

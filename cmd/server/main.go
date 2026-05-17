@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"path/filepath"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -34,6 +35,7 @@ func main() {
 
 	store := storage.NewStorage(cfg.UploadDir)
 	jobManager := jobs.NewManager(cfg.Workers)
+	opStore := metrics.NewOperationStore(filepath.Join(cfg.OutputDir, "operations.json"))
 	jobManager.Start()
 	defer jobManager.Stop()
 
@@ -48,7 +50,7 @@ func main() {
 	app.Use(cors.New())
 
 	// Register handlers
-	handler := http.NewHandler(cfg, store, jobManager)
+	handler := http.NewHandler(cfg, store, jobManager, opStore)
 	handler.RegisterRoutes(app)
 
 	// Start server

@@ -7,6 +7,9 @@ import { clamp } from './utils/helpers';
 let activePollInterval = null;
 
 const MIN_CLIP_DURATION = 0.5;
+const AUDIO_ONLY_FORMATS = new Set(['mp3', 'aac', 'wav', 'flac', 'ogg', 'm4a']);
+
+const isAudioOnlyFormat = (format) => AUDIO_ONLY_FORMATS.has(String(format || '').toLowerCase());
 
 const createId = (prefix) => {
   const random = typeof crypto !== 'undefined' && crypto.randomUUID
@@ -662,6 +665,7 @@ const useStore = create((set, get) => ({
   // === Export ===
   handleExport: async () => {
     const state = get();
+    const audioOnly = isAudioOnlyFormat(state.outputFormat);
     debugLog('store.handleExport', 'requested', {
       activeFileId: state.activeFileId,
       activeClipId: state.activeClipId,
@@ -687,31 +691,38 @@ const useStore = create((set, get) => ({
     });
 
     try {
-      const result = await startTimelineExport({
-            output_format: state.outputFormat,
-            video_codec: state.videoCodec,
-            audio_codec: state.audioCodec,
-            preset: state.preset,
-            crf: state.crf,
-            fast_start: state.fastStart,
-            remove_audio: state.removeAudio,
-            mode: 'fast',
-            resize_width: state.resizeWidth ? parseInt(state.resizeWidth, 10) : undefined,
-            resize_height: state.resizeHeight ? parseInt(state.resizeHeight, 10) : undefined,
-            keep_aspect: state.resizeWidth || state.resizeHeight ? state.keepAspect : undefined,
-            video_bitrate: state.videoBitrate ? state.videoBitrate.toString() : undefined,
-            audio_bitrate: state.audioBitrate ? state.audioBitrate.toString() : undefined,
-            brightness: state.brightness !== 0 ? state.brightness : undefined,
-            contrast: state.contrast !== 1.0 ? state.contrast : undefined,
-            volume: state.volume !== 1.0 ? state.volume : undefined,
-            clips: [...state.clips]
-              .sort((a, b) => a.timelineStart - b.timelineStart)
-              .map((clip) => ({
-                file_id: clip.fileId,
-                source_start: clip.sourceStart,
-                duration: clip.sourceDuration,
-              })),
-          });
+      const payload = {
+        output_format: state.outputFormat,
+        remove_audio: audioOnly ? false : state.removeAudio,
+        mode: 'fast',
+        audio_bitrate: state.audioBitrate ? state.audioBitrate.toString() : undefined,
+        volume: state.volume !== 1.0 ? state.volume : undefined,
+        clips: [...state.clips]
+          .sort((a, b) => a.timelineStart - b.timelineStart)
+          .map((clip) => ({
+            file_id: clip.fileId,
+            source_start: clip.sourceStart,
+            duration: clip.sourceDuration,
+          })),
+      };
+
+      if (!audioOnly) {
+        Object.assign(payload, {
+          video_codec: state.videoCodec,
+          audio_codec: state.audioCodec,
+          preset: state.preset,
+          crf: state.crf,
+          fast_start: state.fastStart,
+          resize_width: state.resizeWidth ? parseInt(state.resizeWidth, 10) : undefined,
+          resize_height: state.resizeHeight ? parseInt(state.resizeHeight, 10) : undefined,
+          keep_aspect: state.resizeWidth || state.resizeHeight ? state.keepAspect : undefined,
+          video_bitrate: state.videoBitrate ? state.videoBitrate.toString() : undefined,
+          brightness: state.brightness !== 0 ? state.brightness : undefined,
+          contrast: state.contrast !== 1.0 ? state.contrast : undefined,
+        });
+      }
+
+      const result = await startTimelineExport(payload);
 
       set({
         jobId: result.job_id,
@@ -736,12 +747,19 @@ const useStore = create((set, get) => ({
 
   handleMerge: async () => {
     const state = get();
+    const audioOnly = isAudioOnlyFormat(state.outputFormat);
     debugLog('store.handleMerge', 'requested', {
       selectedFileIds: state.selectedFileIds,
+      outputFormat: state.outputFormat,
     });
 
     if (state.selectedFileIds.length < 2) {
       set({ error: 'Select at least 2 files to merge' });
+      return;
+    }
+
+    if (audioOnly) {
+      set({ error: `Merge does not support audio-only format: ${state.outputFormat}` });
       return;
     }
 

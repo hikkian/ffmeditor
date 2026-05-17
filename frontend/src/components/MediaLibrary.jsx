@@ -25,6 +25,7 @@ function FileTypeIcon({ file }) {
 export default function MediaLibrary() {
   const files           = useStore((s) => s.files);
   const activeFileId    = useStore((s) => s.activeFileId);
+  const outputFormat    = useStore((s) => s.outputFormat);
   const selectFile      = useStore((s) => s.selectFile);
   const removeFile      = useStore((s) => s.removeFile);
   const handleUpload    = useStore((s) => s.handleUpload);
@@ -33,6 +34,7 @@ export default function MediaLibrary() {
   const selectedFileIds = useStore((s) => s.selectedFileIds);
   const toggleSelection = useStore((s) => s.toggleSelection);
   const handleMerge     = useStore((s) => s.handleMerge);
+  const audioOnlyFormat = ['mp3', 'aac', 'wav', 'flac', 'ogg', 'm4a'].includes(String(outputFormat || '').toLowerCase());
 
   const [isDragOver, setIsDragOver]     = useState(false);
   const [isRecording, setIsRecording]   = useState(false);
@@ -276,18 +278,20 @@ export default function MediaLibrary() {
       {selectedFileIds.length >= 2 && (
         <div className="p-3 animate-fade-in flex-shrink-0" style={{ borderTop: '1px solid var(--color-border)', background: 'var(--color-bg-tertiary)' }}>
           <button
+            disabled={audioOnlyFormat}
             onClick={handleMerge}
             className="w-full py-2 rounded-lg text-xs font-bold flex justify-center items-center gap-2 transition-all"
             style={{
-              background: 'linear-gradient(135deg, #f59e0b, #fb923c)',
-              color: '#000',
-              boxShadow: '0 3px 10px rgba(245,158,11,0.28)',
+              background: audioOnlyFormat ? 'var(--color-bg-tertiary)' : 'linear-gradient(135deg, #f59e0b, #fb923c)',
+              color: audioOnlyFormat ? 'var(--color-text-muted)' : '#000',
+              boxShadow: audioOnlyFormat ? 'none' : '0 3px 10px rgba(245,158,11,0.28)',
+              cursor: audioOnlyFormat ? 'not-allowed' : 'pointer',
             }}
           >
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244" />
             </svg>
-            Merge {selectedFileIds.length} Files
+            {audioOnlyFormat ? 'Merge unavailable for audio-only' : `Merge ${selectedFileIds.length} Files`}
           </button>
         </div>
       )}

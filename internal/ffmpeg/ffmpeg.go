@@ -244,6 +244,11 @@ func Convert(ctx context.Context, opts ConvertOptions, ph ProgressHandler) error
 		return fmt.Errorf("input file not found: %s", opts.InputPath)
 	}
 
+	outputFormat := strings.TrimPrefix(strings.ToLower(filepath.Ext(opts.OutputPath)), ".")
+	if isAudioOnlyFormat(outputFormat) {
+		opts.RemoveVideo = true
+	}
+
 	var totalDuration *float64
 	if info, err := GetMediaInfo(ctx, opts.FFprobePath, opts.InputPath); err == nil && info.Duration != nil {
 		totalDuration = info.Duration
@@ -305,9 +310,7 @@ func Convert(ctx context.Context, opts ConvertOptions, ph ProgressHandler) error
 	if opts.RemoveAudio {
 		args = append(args, "-an")
 	} else {
-		if opts.AudioCodec != nil {
-			args = append(args, "-c:a", *opts.AudioCodec)
-		}
+		args = append(args, "-c:a", resolveAudioCodec(outputFormat, opts.AudioCodec))
 		if opts.AudioBitrate != nil {
 			args = append(args, "-b:a", *opts.AudioBitrate)
 		}
@@ -351,6 +354,7 @@ type TimelineExportOptions struct {
 	CRF          *int
 	Preset       *string
 	RemoveAudio  bool
+	RemoveVideo  bool
 	FastStart    bool
 	ResizeWidth  *int
 	ResizeHeight *int
@@ -390,6 +394,10 @@ func TimelineExport(ctx context.Context, opts TimelineExportOptions, ph Progress
 	if len(opts.Clips) == 0 {
 		return fmt.Errorf("no clips provided")
 	}
+	outputFormat := strings.TrimPrefix(strings.ToLower(filepath.Ext(opts.OutputPath)), ".")
+	if isAudioOnlyFormat(outputFormat) {
+		return timelineExportAudioOnly(ctx, opts, outputFormat, ph, onStage)
+	}
 	stage := func(s string) {
 		if onStage != nil {
 			onStage(s)
@@ -401,18 +409,85 @@ func TimelineExport(ctx context.Context, opts TimelineExportOptions, ph Progress
 	return timelineExportReencode(ctx, opts, ph, stage)
 }
 
+func timelineExportAudioOnly(ctx context.Context, opts TimelineExportOptions, outputFormat string, ph ProgressHandler, onStage func(string)) error {
+	onStage("preparing")
+
+	if len(opts.Clips) == 1 {
+		clip := opts.Clips[0]
+		if !clip.HasAudio {
+			return fmt.Errorf("selected clip has no audio stream")
+		}
+		onStage("extracting audio")
+		args := []string{
+			"-ss", fmt.Sprintf("%.6f", clip.SourceStart),
+			"-t", fmt.Sprintf("%.6f", clip.Duration),
+			"-i", clip.FilePath,
+			"-vn",
+			"-c:a", resolveAudioCodec(outputFormat, opts.AudioCodec),
+		}
+		if opts.AudioBitrate != nil {
+			args = append(args, "-b:a", *opts.AudioBitrate)
+		}
+		if opts.Volume != nil {
+			args = append(args, "-af", fmt.Sprintf("volume=%f", *opts.Volume))
+		}
+		args = append(args, "-progress", "pipe:1", "-v", "warning", "-y", opts.OutputPath)
+		return runFFmpeg(ctx, opts.FFmpegPath, args, &clip.Duration, ph)
+	}
+
+	totalDuration := 0.0
+	for _, c := range opts.Clips {
+		totalDuration += c.Duration
+	}
+
+	args := []string{}
+	for _, clip := range opts.Clips {
+		args = append(args,
+			"-ss", fmt.Sprintf("%.6f", clip.SourceStart),
+			"-t", fmt.Sprintf("%.6f", clip.Duration),
+			"-i", clip.FilePath,
+		)
+	}
+
+	var fc, concatA strings.Builder
+	for i, clip := range opts.Clips {
+		if clip.HasAudio {
+			if opts.Volume != nil {
+				fmt.Fprintf(&fc, "[%d:a]aresample=44100,aformat=channel_layouts=stereo,volume=%f[a%d];", i, *opts.Volume, i)
+			} else {
+				fmt.Fprintf(&fc, "[%d:a]aresample=44100,aformat=channel_layouts=stereo[a%d];", i, i)
+			}
+		} else {
+			fmt.Fprintf(&fc, "anullsrc=r=44100:cl=stereo:d=%.3f[a%d];", clip.Duration, i)
+		}
+		fmt.Fprintf(&concatA, "[a%d]", i)
+	}
+	fmt.Fprintf(&fc, "%sconcat=n=%d:v=0:a=1[outa]", concatA.String(), len(opts.Clips))
+
+	args = append(args, "-filter_complex", fc.String(), "-map", "[outa]")
+	args = append(args, "-c:a", resolveAudioCodec(outputFormat, opts.AudioCodec))
+	if opts.AudioBitrate != nil {
+		args = append(args, "-b:a", *opts.AudioBitrate)
+	}
+	args = append(args, "-progress", "pipe:1", "-v", "warning", "-y", opts.OutputPath)
+
+	onStage("encoding")
+	return runFFmpeg(ctx, opts.FFmpegPath, args, &totalDuration, ph)
+}
+
 // timelineExportFast extracts each segment with -c copy, then uses the concat
-// demuxer. No re-encoding — extremely fast even for large files.
+// demuxer. No re-encoding – extremely fast even for large files.
 func timelineExportFast(ctx context.Context, opts TimelineExportOptions, ph ProgressHandler, onStage func(string)) error {
 	totalDuration := 0.0
 	for _, c := range opts.Clips {
 		totalDuration += c.Duration
 	}
 
-	// Single-clip fast path: extract directly to output — no temp dir, no concat.
+	// Single-clip fast path: extract directly to output – no temp dir, no concat.
 	if len(opts.Clips) == 1 {
 		clip := opts.Clips[0]
 		onStage("extracting")
+		outputFormat := strings.TrimPrefix(strings.ToLower(filepath.Ext(opts.OutputPath)), ".")
 		args := []string{
 			"-ss", fmt.Sprintf("%.6f", clip.SourceStart),
 			"-t", fmt.Sprintf("%.6f", clip.Duration),
@@ -422,6 +497,20 @@ func timelineExportFast(ctx context.Context, opts TimelineExportOptions, ph Prog
 		}
 		if opts.RemoveAudio {
 			args = append(args, "-an")
+		} else if isAudioOnlyFormat(outputFormat) {
+			args = []string{
+				"-ss", fmt.Sprintf("%.6f", clip.SourceStart),
+				"-t", fmt.Sprintf("%.6f", clip.Duration),
+				"-i", clip.FilePath,
+				"-vn",
+				"-c:a", resolveAudioCodec(outputFormat, opts.AudioCodec),
+			}
+			if opts.AudioBitrate != nil {
+				args = append(args, "-b:a", *opts.AudioBitrate)
+			}
+			if opts.Volume != nil {
+				args = append(args, "-af", fmt.Sprintf("volume=%f", *opts.Volume))
+			}
 		}
 		if opts.FastStart && strings.HasSuffix(strings.ToLower(opts.OutputPath), ".mp4") {
 			args = append(args, "-movflags", "+faststart")
@@ -914,6 +1003,42 @@ func runFFmpeg(ctx context.Context, ffmpegPath string, args []string, totalDurat
 
 func getPreset(opts ConvertOptions) string {
 	return getPresetFromMode(opts.Preset, opts.PresetMode)
+}
+
+func isAudioOnlyFormat(format string) bool {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "mp3", "aac", "m4a", "wav", "flac", "ogg":
+		return true
+	default:
+		return false
+	}
+}
+
+func defaultAudioCodecForFormat(format string) string {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "mp3":
+		return "libmp3lame"
+	case "aac", "m4a":
+		return "aac"
+	case "wav":
+		return "pcm_s16le"
+	case "flac":
+		return "flac"
+	case "ogg":
+		return "libopus"
+	default:
+		return "aac"
+	}
+}
+
+func resolveAudioCodec(format string, codec *string) string {
+	if isAudioOnlyFormat(format) {
+		return defaultAudioCodecForFormat(format)
+	}
+	if codec != nil && *codec != "" && *codec != "copy" {
+		return *codec
+	}
+	return defaultAudioCodecForFormat(format)
 }
 
 func getPresetFromMode(preset *string, mode string) string {

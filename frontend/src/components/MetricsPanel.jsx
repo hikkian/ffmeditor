@@ -139,7 +139,7 @@ export default function MetricsPanel({ onClose }) {
   const procMem = snap?.proc_memory_mb ?? -1;
   const gpuValue = gpu?.util_percent >= 0
     ? `${gpu.util_percent.toFixed(0)}%`
-    : (gpu?.name || 'Telemetry unavailable');
+    : (gpu?.available ? 'No utilization data' : 'Not detected');
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden bg-[var(--color-bg-secondary)] animate-fade-in">
@@ -215,32 +215,33 @@ export default function MetricsPanel({ onClose }) {
 
             <div>
               <p className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">GPU</p>
-              {gpu ? (
-                <div className="space-y-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-[10px] text-[var(--color-text-secondary)] truncate" title={gpu.name || 'GPU'}>
-                      {gpu.name || 'GPU'}
-                    </p>
-                    <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">
-                      {gpu.source || 'telemetry'}
-                    </span>
+              <div className="space-y-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] p-3">
+                {gpu?.available ? (
+                  <>
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-[10px] text-[var(--color-text-secondary)] truncate" title={gpu?.name || 'GPU'}>
+                        {gpu?.name || 'GPU'}
+                      </p>
+                      <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">
+                        {gpu.source || 'telemetry'}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <MetricCard label="Utilization" value={gpuValue} tone="accent" />
+                      <MetricCard
+                        label="VRAM"
+                        value={gpu.mem_total_mb > 0 ? `${Math.max(gpu.mem_used_mb, 0).toFixed(0)} / ${gpu.mem_total_mb.toFixed(0)} MB` : 'N/A'}
+                        hint={gpu.mem_total_mb > 0 ? 'allocated / total' : 'No VRAM data'}
+                      />
+                    </div>
+                    <Gauge label="GPU utilization" value={gpu.util_percent} max={100} unit="%" color="accent" />
+                  </>
+                ) : (
+                  <div className="grid grid-cols-1 gap-2">
+                    <MetricCard label="Status" value="Not detected" tone="default" hint="No GPU telemetry on this host" />
                   </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <MetricCard label="Utilization" value={gpuValue} tone="accent" />
-                    <MetricCard
-                      label="VRAM"
-                      value={gpu.mem_total_mb > 0 ? `${Math.max(gpu.mem_used_mb, 0).toFixed(0)} / ${gpu.mem_total_mb.toFixed(0)} MB` : 'N/A'}
-                      hint={gpu.mem_total_mb > 0 ? 'allocated / total' : 'No VRAM data'}
-                    />
-                  </div>
-                  <Gauge label="GPU utilization" value={gpu.util_percent} max={100} unit="%" color="accent" />
-                </div>
-              ) : (
-                <div className="px-3 py-3 rounded-xl bg-[var(--color-bg-tertiary)] border border-[var(--color-border)]">
-                  <p className="text-[10px] text-[var(--color-text-muted)]">GPU telemetry unavailable</p>
-                  <p className="text-[10px] text-[var(--color-text-muted)] opacity-70 mt-0.5">Waiting for system probe</p>
-                </div>
-              )}
+                )}
+              </div>
             </div>
 
             <div className="flex items-center gap-2 pt-1">
