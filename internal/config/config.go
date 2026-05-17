@@ -16,6 +16,10 @@ type Config struct {
 	UploadDir         string
 	OutputDir         string
 	LogRingBufferSize int
+	// HWAccel: "auto" (detect), "none", "cuda", "qsv", "videotoolbox"
+	HWAccel string
+	// ResolvedHWEncoder is set at startup after probing ffmpeg (e.g. "h264_nvenc", "h264_qsv", "").
+	ResolvedHWEncoder string
 }
 
 func Load() *Config {
@@ -26,6 +30,7 @@ func Load() *Config {
 	ffmpegPath := getEnv("FFMPEG_PATH", "ffmpeg")
 	ffprobePath := getEnv("FFPROBE_PATH", "ffprobe")
 	logRingBufferSize := getEnvInt("LOG_RING_BUFFER_SIZE", 200)
+	hwAccel := getEnv("HWACCEL", "auto") // auto | none | cuda | qsv | videotoolbox
 
 	// Create directories
 	uploadDir := filepath.Join(".", "uploads")
@@ -43,6 +48,7 @@ func Load() *Config {
 		UploadDir:         uploadDir,
 		OutputDir:         outputDir,
 		LogRingBufferSize: logRingBufferSize,
+		HWAccel:           hwAccel,
 	}
 }
 

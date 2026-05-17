@@ -30,8 +30,25 @@ export async function startMerge(payload) {
   return res.data;
 }
 
+export async function startTimelineExport(payload) {
+  const res = await api.post('/timeline/export', payload);
+  return res.data;
+}
+
 export async function getJobStatus(jobId) {
   const res = await api.get(`/jobs/${jobId}`);
+  return res.data;
+}
+
+export async function cancelJob(jobId) {
+  const res = await api.delete(`/jobs/${jobId}`);
+  return res.data;
+}
+
+export async function getFileWaveform(fileId, bars = 160) {
+  const res = await api.get(`/files/${fileId}/waveform`, {
+    params: { bars },
+  });
   return res.data;
 }
 
@@ -41,6 +58,21 @@ export function getDownloadUrl(jobId) {
 
 export async function deleteFile(fileId) {
   const res = await api.delete(`/files/${fileId}`);
+  return res.data;
+}
+
+export async function getMetricsSystem() {
+  const res = await api.get('/metrics/system/current');
+  return res.data;
+}
+
+export async function getMetricsOperations() {
+  const res = await api.get('/metrics/operations');
+  return res.data;
+}
+
+export async function getMetricsSummary() {
+  const res = await api.get('/metrics/summary');
   return res.data;
 }
 

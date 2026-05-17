@@ -16,6 +16,7 @@ import (
 	"ffmeditor/internal/config"
 	"ffmeditor/internal/ffmpeg"
 	"ffmeditor/internal/jobs"
+	"ffmeditor/internal/metrics"
 	"ffmeditor/internal/storage"
 	"ffmeditor/internal/validator"
 )
@@ -40,9 +41,13 @@ func (h *Handler) RegisterRoutes(app *fiber.App) {
 	api.Post("/upload", h.Upload)
 	api.Post("/convert", h.Convert)
 	api.Post("/merge", h.Merge)
+	api.Post("/timeline/export", h.TimelineExport)
 	api.Get("/jobs/:id", h.GetJob)
+	api.Delete("/jobs/:id", h.CancelJob)
 	api.Get("/download/:id", h.Download)
+	api.Get("/files/:id/waveform", h.GetFileWaveform)
 	api.Delete("/files/:id", h.DeleteFile)
+	api.Get("/metrics/system/current", h.MetricsSystem)
 	api.Get("/health", h.Health)
 }
 
@@ -174,8 +179,14 @@ func (h *Handler) Convert(c *fiber.Ctx) error {
 	// Create job
 	job := h.jobManager.CreateJob(req.FileID, uf.OriginalName, req.OutputFormat)
 
-	// Start conversion in background
-	go h.performConvert(job, uf, &req)
+	reqCopy := req
+	if err := h.jobManager.Enqueue(job, func() {
+		h.performConvert(job, uf, &reqCopy)
+	}); err != nil {
+		return c.Status(http.StatusServiceUnavailable).JSON(fiber.Map{
+			"error": err.Error(),
+		})
+	}
 
 	return c.Status(http.StatusOK).JSON(fiber.Map{
 		"job_id": job.ID,
@@ -185,11 +196,11 @@ func (h *Handler) Convert(c *fiber.Ctx) error {
 
 func (h *Handler) performConvert(job *jobs.Job, uf *storage.UploadedFile, req *validator.ConvertRequest) {
 	h.jobManager.AddLog(job.ID, "Starting conversion...")
-	h.jobManager.SetStatus(job.ID, jobs.StatusProcessing)
 
 	// Generate output filename
 	outputName := fmt.Sprintf("%s_converted.%s", job.ID[:8], req.OutputFormat)
 	outputPath := filepath.Join(h.cfg.OutputDir, outputName)
+	h.jobManager.SetOutputPath(job.ID, outputPath)
 
 	// Set up convert options
 	opts := ffmpeg.ConvertOptions{
@@ -271,7 +282,14 @@ func (h *Handler) Merge(c *fiber.Ctx) error {
 	// Create job using the first file's ID as anchor
 	job := h.jobManager.CreateJob(req.FileIDs[0], "Merged_Video", req.OutputFormat)
 
-	go h.performMerge(job, inputPaths, duration, &req)
+	reqCopy := req
+	if err := h.jobManager.Enqueue(job, func() {
+		h.performMerge(job, inputPaths, duration, &reqCopy)
+	}); err != nil {
+		return c.Status(http.StatusServiceUnavailable).JSON(fiber.Map{
+			"error": err.Error(),
+		})
+	}
 
 	return c.Status(http.StatusOK).JSON(fiber.Map{
 		"job_id": job.ID,
@@ -280,21 +298,32 @@ func (h *Handler) Merge(c *fiber.Ctx) error {
 }
 
 func (h *Handler) performMerge(job *jobs.Job, inputPaths []string, totalDuration float64, req *validator.MergeRequest) {
+	start := time.Now()
 	h.jobManager.AddLog(job.ID, "Starting merge...")
-	h.jobManager.SetStatus(job.ID, jobs.StatusProcessing)
 
 	outputName := fmt.Sprintf("%s_merged.%s", job.ID[:8], req.OutputFormat)
 	outputPath := filepath.Join(h.cfg.OutputDir, outputName)
+	h.jobManager.SetOutputPath(job.ID, outputPath)
 
 	opts := ffmpeg.MergeOptions{
 		InputPaths:  inputPaths,
 		OutputPath:  outputPath,
 		FFmpegPath:  h.cfg.FFmpegPath,
 		FFprobePath: h.cfg.FFprobePath,
+		HWEncoder:   h.cfg.ResolvedHWEncoder,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()
+	h.jobManager.SetCancelFunc(job.ID, cancel)
+
+	strategy := "reencode"
+	if ffmpeg.CanFastMerge(ctx, opts) {
+		strategy = "stream_copy"
+	}
+	h.jobManager.SetStrategy(job.ID, strategy)
+	h.jobManager.SetStage(job.ID, "preparing merge")
+	h.jobManager.AddLog(job.ID, fmt.Sprintf("Strategy: %s (%d files)", strategy, len(inputPaths)))
 
 	progressHandler := func(current, total, outTimeMs float64) {
 		if totalDuration > 0 {
@@ -309,6 +338,8 @@ func (h *Handler) performMerge(job *jobs.Job, inputPaths []string, totalDuration
 		return
 	}
 
+	h.jobManager.SetStage(job.ID, "done")
+	h.jobManager.AddLog(job.ID, fmt.Sprintf("Completed in %.1fs (strategy: %s)", time.Since(start).Seconds(), strategy))
 	h.jobManager.AddLog(job.ID, "Merge completed successfully")
 	h.jobManager.SetCompleted(job.ID, outputName)
 }
@@ -352,6 +383,165 @@ func (h *Handler) Download(c *fiber.Ctx) error {
 	return c.Download(outputPath, job.OutputFilename)
 }
 
+func (h *Handler) GetFileWaveform(c *fiber.Ctx) error {
+	fileID := c.Params("id")
+	uf := h.storage.Get(fileID)
+	if uf == nil {
+		return c.Status(http.StatusNotFound).JSON(fiber.Map{
+			"error": "File not found",
+		})
+	}
+
+	bars := c.QueryInt("bars", 160)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	waveform, err := ffmpeg.GenerateWaveform(ctx, h.cfg.FFmpegPath, uf.StoragePath, bars)
+	if err != nil {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{
+			"error": err.Error(),
+		})
+	}
+
+	return c.Status(http.StatusOK).JSON(fiber.Map{
+		"file_id": fileID,
+		"bars":    waveform,
+	})
+}
+
+// TimelineExport starts an EDL-based export job.
+func (h *Handler) TimelineExport(c *fiber.Ctx) error {
+	var req validator.TimelineExportRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+	if err := req.Validate(); err != nil {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	// Resolve file IDs → storage paths and populate HasVideo/HasAudio.
+	clips := make([]ffmpeg.TimelineExportClip, 0, len(req.Clips))
+	for _, rc := range req.Clips {
+		uf := h.storage.Get(rc.FileID)
+		if uf == nil {
+			return c.Status(http.StatusNotFound).JSON(fiber.Map{
+				"error": fmt.Sprintf("file %s not found", rc.FileID),
+			})
+		}
+		hasVideo, hasAudio := true, true
+		if uf.MediaInfo != nil {
+			hasVideo = uf.MediaInfo.HasVideo
+			hasAudio = uf.MediaInfo.HasAudio
+		}
+		clips = append(clips, ffmpeg.TimelineExportClip{
+			FileID:      rc.FileID,
+			FilePath:    uf.StoragePath,
+			SourceStart: rc.SourceStart,
+			Duration:    rc.Duration,
+			HasVideo:    hasVideo,
+			HasAudio:    hasAudio,
+		})
+	}
+
+	firstUF := h.storage.Get(req.Clips[0].FileID)
+	job := h.jobManager.CreateJob(req.Clips[0].FileID, firstUF.OriginalName, req.OutputFormat)
+
+	reqCopy := req
+	clipsCopy := clips
+	if err := h.jobManager.Enqueue(job, func() {
+		h.performTimelineExport(job, clipsCopy, &reqCopy)
+	}); err != nil {
+		return c.Status(http.StatusServiceUnavailable).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	return c.Status(http.StatusOK).JSON(fiber.Map{
+		"job_id": job.ID,
+		"status": job.Status,
+	})
+}
+
+func (h *Handler) performTimelineExport(job *jobs.Job, clips []ffmpeg.TimelineExportClip, req *validator.TimelineExportRequest) {
+	start := time.Now()
+	h.jobManager.AddLog(job.ID, "Timeline export started")
+
+	outputName := fmt.Sprintf("%s_export.%s", job.ID[:8], req.OutputFormat)
+	outputPath := filepath.Join(h.cfg.OutputDir, outputName)
+	h.jobManager.SetOutputPath(job.ID, outputPath)
+
+	opts := ffmpeg.TimelineExportOptions{
+		Clips:        clips,
+		OutputPath:   outputPath,
+		FFmpegPath:   h.cfg.FFmpegPath,
+		FFprobePath:  h.cfg.FFprobePath,
+		VideoCodec:   req.VideoCodec,
+		AudioCodec:   req.AudioCodec,
+		VideoBitrate: req.VideoBitrate,
+		AudioBitrate: req.AudioBitrate,
+		CRF:          req.CRF,
+		Preset:       req.Preset,
+		RemoveAudio:  req.RemoveAudio,
+		FastStart:    req.FastStart,
+		ResizeWidth:  req.ResizeWidth,
+		ResizeHeight: req.ResizeHeight,
+		KeepAspect:   req.KeepAspect,
+		Brightness:   req.Brightness,
+		Contrast:     req.Contrast,
+		Volume:       req.Volume,
+		PresetMode:   h.cfg.PresetMode,
+		Mode:         req.Mode,
+		HWEncoder:    h.cfg.ResolvedHWEncoder,
+	}
+
+	strategy := "stream_copy"
+	if !ffmpeg.CanStreamCopy(opts) {
+		strategy = "reencode"
+	}
+	h.jobManager.SetStrategy(job.ID, strategy)
+	h.jobManager.AddLog(job.ID, fmt.Sprintf("Strategy: %s (%d clips)", strategy, len(clips)))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
+	defer cancel()
+	h.jobManager.SetCancelFunc(job.ID, cancel)
+
+	progressHandler := func(current, _, outTimeMs float64) {
+		h.jobManager.SetProgress(job.ID, current, outTimeMs)
+	}
+	stageHandler := func(stage string) {
+		h.jobManager.SetStage(job.ID, stage)
+		h.jobManager.AddLog(job.ID, "→ "+stage)
+	}
+
+	if err := ffmpeg.TimelineExport(ctx, opts, progressHandler, stageHandler); err != nil {
+		h.jobManager.AddLog(job.ID, "Error: "+err.Error())
+		h.jobManager.SetError(job.ID, err.Error())
+		return
+	}
+
+	elapsed := time.Since(start).Seconds()
+	h.jobManager.AddLog(job.ID, fmt.Sprintf("Completed in %.1fs (strategy: %s)", elapsed, strategy))
+	h.jobManager.SetCompleted(job.ID, outputName)
+}
+
+// CancelJob aborts a running job.
+func (h *Handler) CancelJob(c *fiber.Ctx) error {
+	jobID := c.Params("id")
+	if ok := h.jobManager.Cancel(jobID); !ok {
+		job := h.jobManager.GetJob(jobID)
+		if job == nil {
+			return c.Status(http.StatusNotFound).JSON(fiber.Map{"error": "job not found"})
+		}
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{
+			"error": fmt.Sprintf("job cannot be canceled (status: %s)", job.Status),
+		})
+	}
+	return c.Status(http.StatusOK).JSON(fiber.Map{"canceled": true})
+}
+
+// MetricsSystem returns a cached system snapshot (CPU, RAM, GPU).
+func (h *Handler) MetricsSystem(c *fiber.Ctx) error {
+	return c.Status(http.StatusOK).JSON(metrics.Current())
+}
+
 // Health returns server health status
 func (h *Handler) Health(c *fiber.Ctx) error {
 	return c.Status(http.StatusOK).JSON(fiber.Map{
@@ -378,9 +568,4 @@ func (h *Handler) DeleteFile(c *fiber.Ctx) error {
 	return c.Status(http.StatusOK).JSON(fiber.Map{
 		"success": true,
 	})
-}
-
-// Helper to set status (public version)
-func (h *Handler) SetStatus(jobID string, status jobs.JobStatus) {
-	h.jobManager.SetStatus(jobID, status)
 }

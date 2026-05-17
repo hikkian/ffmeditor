@@ -1,69 +1,227 @@
+import { useRef, useState, useCallback, useEffect } from 'react';
 import MediaLibrary from './components/MediaLibrary';
 import VideoPreview from './components/VideoPreview';
 import Timeline from './components/Timeline';
 import EditingControls from './components/EditingControls';
+import MetricsPanel from './components/MetricsPanel';
 import ErrorToast from './components/ErrorToast';
+import useStore from './store';
+
+const MIN_LEFT = 220; const MAX_LEFT = 420;
+const MIN_RIGHT = 260; const MAX_RIGHT = 480;
+const MIN_TIMELINE = 140; const MAX_TIMELINE = 360;
+
+function ThemeToggle({ theme, onToggle }) {
+  const isDark = theme === 'dark';
+  return (
+    <button
+      onClick={onToggle}
+      title={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
+      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-all"
+      style={{
+        background: 'var(--color-bg-tertiary)',
+        border: '1px solid var(--color-border)',
+        color: 'var(--color-text-secondary)',
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.borderColor = 'var(--color-accent)';
+        e.currentTarget.style.color = 'var(--color-accent)';
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.borderColor = 'var(--color-border)';
+        e.currentTarget.style.color = 'var(--color-text-secondary)';
+      }}
+    >
+      {isDark ? (
+        /* Sun icon */
+        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z" />
+        </svg>
+      ) : (
+        /* Moon icon */
+        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z" />
+        </svg>
+      )}
+      <span className="text-[10px] font-medium">{isDark ? 'Light' : 'Dark'}</span>
+    </button>
+  );
+}
+
+function ResizeHandle({ direction, onMouseDown }) {
+  const isHoriz = direction === 'col';
+  const [hovered, setHovered] = useState(false);
+  return (
+    <div
+      className="flex-shrink-0 flex items-center justify-center"
+      style={{
+        width: isHoriz ? 5 : '100%',
+        height: isHoriz ? '100%' : 5,
+        cursor: isHoriz ? 'col-resize' : 'row-resize',
+        zIndex: 10,
+        position: 'relative',
+      }}
+      onMouseDown={onMouseDown}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <div style={{
+        width: isHoriz ? (hovered ? 2 : 1) : '100%',
+        height: isHoriz ? '100%' : (hovered ? 2 : 1),
+        background: hovered ? 'var(--color-accent)' : 'var(--color-border)',
+        boxShadow: hovered ? '0 0 6px rgba(245,158,11,0.4)' : 'none',
+        transition: 'all 0.15s',
+      }} />
+    </div>
+  );
+}
 
 export default function App() {
+  const isExporting  = useStore((s) => s.isExporting);
+  const downloadReady = useStore((s) => s.downloadReady);
+
+  const [theme, setTheme] = useState(() => localStorage.getItem('ffm-theme') || 'dark');
+  const [leftWidth, setLeftWidth]   = useState(280);
+  const [rightWidth, setRightWidth] = useState(320);
+  const [timelineH, setTimelineH]   = useState(210);
+  const [showMetrics, setShowMetrics] = useState(false);
+  const draggingRef = useRef(null);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('ffm-theme', theme);
+  }, [theme]);
+
+  const toggleTheme = useCallback(() => setTheme((t) => t === 'dark' ? 'light' : 'dark'), []);
+
+  const startDrag = useCallback((e, type) => {
+    e.preventDefault();
+    draggingRef.current = { type, startX: e.clientX, startY: e.clientY, leftWidth, rightWidth, timelineH };
+    const onMove = (ev) => {
+      const d = draggingRef.current;
+      if (!d) return;
+      if (d.type === 'left')
+        setLeftWidth(Math.max(MIN_LEFT, Math.min(MAX_LEFT, d.leftWidth + ev.clientX - d.startX)));
+      else if (d.type === 'right')
+        setRightWidth(Math.max(MIN_RIGHT, Math.min(MAX_RIGHT, d.rightWidth - (ev.clientX - d.startX))));
+      else if (d.type === 'timeline')
+        setTimelineH(Math.max(MIN_TIMELINE, Math.min(MAX_TIMELINE, d.timelineH - (ev.clientY - d.startY))));
+    };
+    const onUp = () => {
+      draggingRef.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [leftWidth, rightWidth, timelineH]);
+
+  const badge = downloadReady
+    ? { dot: 'var(--color-success)', text: 'Ready', bg: 'var(--color-success-muted)', border: 'rgba(34,197,94,0.2)', color: 'var(--color-success)' }
+    : isExporting
+    ? { dot: 'var(--color-accent)', text: 'Exporting', bg: 'var(--color-accent-muted)', border: 'var(--color-accent-border)', color: 'var(--color-accent)' }
+    : { dot: 'var(--color-text-muted)', text: 'Editing', bg: 'var(--color-bg-tertiary)', border: 'var(--color-border)', color: 'var(--color-text-secondary)' };
+
   return (
-    <div className="h-screen w-screen flex flex-col bg-[var(--color-bg-primary)] overflow-hidden">
-      {/* Top Bar */}
-      <header className="flex items-center justify-between px-5 h-12 bg-[var(--color-bg-secondary)] border-b border-[var(--color-border)] flex-shrink-0">
-        <div className="flex items-center gap-3">
-          {/* Logo */}
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[var(--color-accent)] to-[var(--color-purple)] flex items-center justify-center shadow-lg shadow-[var(--color-accent)]/20">
-              <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M8 5v14l11-7z" />
-              </svg>
-            </div>
-            <h1 className="text-sm font-bold tracking-tight">
-              <span className="text-[var(--color-text-primary)]">FFM</span>
-              <span className="text-[var(--color-accent)]"> Editor</span>
-            </h1>
+    <div className="h-screen w-screen flex flex-col overflow-hidden" style={{ background: 'var(--color-bg-primary)' }}>
+
+      {/* ── Header ── */}
+      <header className="flex items-center justify-between flex-shrink-0 px-4"
+        style={{ height: 44, background: 'var(--color-bg-secondary)', borderBottom: '1px solid var(--color-border)' }}
+      >
+        {/* Logo */}
+        <div className="flex items-center gap-2.5">
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
+            style={{ background: 'linear-gradient(135deg, #f59e0b, #fb923c)', boxShadow: '0 2px 10px rgba(245,158,11,0.3)' }}
+          >
+            <svg className="w-4 h-4 text-black" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M8 5v14l11-7z" />
+            </svg>
           </div>
-          {/* Separator */}
-          <div className="w-px h-5 bg-[var(--color-border)] mx-1" />
-          <span className="text-[10px] text-[var(--color-text-muted)] font-medium uppercase tracking-wider">Video Editor</span>
+          <div className="flex items-baseline gap-1">
+            <span className="text-sm font-bold tracking-tight" style={{ color: 'var(--color-text-primary)' }}>FFM</span>
+            <span className="text-sm font-bold tracking-tight" style={{ color: 'var(--color-accent)' }}>Editor</span>
+          </div>
+          <div className="w-px h-4 mx-1" style={{ background: 'var(--color-border)' }} />
+          <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--color-text-muted)' }}>Video Editor</span>
         </div>
 
-        {/* Right side */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[var(--color-success-muted)]">
-            <div className="w-1.5 h-1.5 rounded-full bg-[var(--color-success)] animate-pulse" />
-            <span className="text-[10px] text-[var(--color-success)] font-medium">Ready</span>
+        {/* Right controls */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowMetrics((v) => !v)}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-all"
+            style={{
+              background: showMetrics ? 'rgba(245,158,11,0.10)' : 'var(--color-bg-tertiary)',
+              border: `1px solid ${showMetrics ? 'rgba(245,158,11,0.18)' : 'var(--color-border)'}`,
+              color: showMetrics ? 'var(--color-accent)' : 'var(--color-text-secondary)',
+            }}
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+            <span className="text-[10px] font-medium">Metrics</span>
+          </button>
+          <ThemeToggle theme={theme} onToggle={toggleTheme} />
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md"
+            style={{ background: badge.bg, border: `1px solid ${badge.border}` }}
+          >
+            <div className="w-1.5 h-1.5 rounded-full"
+              style={{ background: badge.dot, animation: isExporting ? 'recording-pulse 1s ease-in-out infinite' : undefined }}
+            />
+            <span className="text-[10px] font-medium" style={{ color: badge.color }}>{badge.text}</span>
           </div>
         </div>
       </header>
 
-      {/* Main Content Area */}
+      {/* ── Main ── */}
       <div className="flex flex-1 min-h-0">
-        {/* Left Panel - Media Library */}
-        <aside className="w-64 flex-shrink-0 bg-[var(--color-bg-secondary)] border-r border-[var(--color-border)]">
+        <aside className="flex-shrink-0" style={{ width: leftWidth, background: 'var(--color-bg-secondary)', borderRight: '1px solid var(--color-border)' }}>
           <MediaLibrary />
         </aside>
 
-        {/* Center Area */}
+        <ResizeHandle direction="col" onMouseDown={(e) => startDrag(e, 'left')} />
+
         <div className="flex-1 flex flex-col min-w-0">
-          {/* Video Preview */}
-          <div className="flex-1 min-h-0 bg-[var(--color-surface)]">
+          <div className="flex-1 min-h-0" style={{ background: 'var(--color-surface)' }}>
             <VideoPreview />
           </div>
 
-          {/* Timeline */}
-          <div className="h-[140px] flex-shrink-0 bg-[var(--color-bg-secondary)] border-t border-[var(--color-border)]">
+          <ResizeHandle direction="row" onMouseDown={(e) => startDrag(e, 'timeline')} />
+
+          <div className="flex-shrink-0" style={{ height: timelineH, background: 'var(--color-bg-secondary)', borderTop: '1px solid var(--color-border)' }}>
             <Timeline />
           </div>
         </div>
 
-        {/* Right Panel - Editing Controls */}
-        <aside className="w-72 flex-shrink-0 bg-[var(--color-bg-secondary)] border-l border-[var(--color-border)]">
-          <EditingControls />
+        <ResizeHandle direction="col" onMouseDown={(e) => startDrag(e, 'right')} />
+
+        <aside
+          className="flex-shrink-0 flex flex-col min-h-0 overflow-hidden"
+          style={{ width: rightWidth, background: 'var(--color-bg-secondary)', borderLeft: '1px solid var(--color-border)' }}
+        >
+          {showMetrics && (
+            <>
+              <div
+                className="flex-shrink-0"
+                style={{
+                  height: 'clamp(260px, 34vh, 360px)',
+                  borderBottom: '1px solid var(--color-border)',
+                }}
+              >
+                <MetricsPanel onClose={() => setShowMetrics(false)} />
+              </div>
+              <div className="h-px flex-shrink-0" style={{ background: 'var(--color-border)' }} />
+            </>
+          )}
+          <div className="flex-1 min-h-0 overflow-hidden">
+            <EditingControls />
+          </div>
         </aside>
       </div>
 
-      {/* Error Toast */}
       <ErrorToast />
+
     </div>
   );
 }

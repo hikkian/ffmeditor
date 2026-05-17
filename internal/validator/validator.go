@@ -84,6 +84,74 @@ func (r *ConvertRequest) Validate() error {
 	return nil
 }
 
+// TimelineClip is one segment in an EDL-style export request.
+type TimelineClip struct {
+	FileID      string  `json:"file_id"`
+	SourceStart float64 `json:"source_start"`
+	Duration    float64 `json:"duration"`
+}
+
+// TimelineExportRequest drives POST /timeline/export.
+// Mode "fast" uses stream-copy (default); "precise" forces re-encode.
+type TimelineExportRequest struct {
+	Clips        []TimelineClip `json:"clips"`
+	OutputFormat string         `json:"output_format"`
+	VideoCodec   *string        `json:"video_codec"`
+	AudioCodec   *string        `json:"audio_codec"`
+	VideoBitrate *string        `json:"video_bitrate"`
+	AudioBitrate *string        `json:"audio_bitrate"`
+	CRF          *int           `json:"crf"`
+	Preset       *string        `json:"preset"`
+	RemoveAudio  bool           `json:"remove_audio"`
+	FastStart    bool           `json:"fast_start"`
+	ResizeWidth  *int           `json:"resize_width"`
+	ResizeHeight *int           `json:"resize_height"`
+	KeepAspect   bool           `json:"keep_aspect"`
+	Brightness   *float64       `json:"brightness"`
+	Contrast     *float64       `json:"contrast"`
+	Volume       *float64       `json:"volume"`
+	Mode         string         `json:"mode"`
+}
+
+func (r *TimelineExportRequest) Validate() error {
+	if len(r.Clips) == 0 {
+		return fmt.Errorf("clips must not be empty")
+	}
+	if r.OutputFormat == "" {
+		return fmt.Errorf("output_format is required")
+	}
+	if !AllowedOutputFormats[strings.ToLower(r.OutputFormat)] {
+		return fmt.Errorf("output_format not allowed: %s", r.OutputFormat)
+	}
+	for i, clip := range r.Clips {
+		if clip.FileID == "" {
+			return fmt.Errorf("clip[%d].file_id is required", i)
+		}
+		if clip.SourceStart < 0 {
+			return fmt.Errorf("clip[%d].source_start cannot be negative", i)
+		}
+		if clip.Duration <= 0 {
+			return fmt.Errorf("clip[%d].duration must be positive", i)
+		}
+	}
+	if r.VideoCodec != nil && !AllowedVideoCodecs[*r.VideoCodec] {
+		return fmt.Errorf("video_codec not allowed: %s", *r.VideoCodec)
+	}
+	if r.AudioCodec != nil && !AllowedAudioCodecs[*r.AudioCodec] {
+		return fmt.Errorf("audio_codec not allowed: %s", *r.AudioCodec)
+	}
+	if r.Preset != nil && !AllowedPresets[*r.Preset] {
+		return fmt.Errorf("preset not allowed: %s", *r.Preset)
+	}
+	if r.CRF != nil && (*r.CRF < 18 || *r.CRF > 35) {
+		return fmt.Errorf("crf must be between 18 and 35")
+	}
+	if r.Mode != "" && r.Mode != "fast" && r.Mode != "precise" {
+		return fmt.Errorf("mode must be 'fast' or 'precise'")
+	}
+	return nil
+}
+
 type MergeRequest struct {
 	FileIDs      []string `json:"file_ids"`
 	OutputFormat string   `json:"output_format"`

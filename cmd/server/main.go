@@ -8,8 +8,10 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/logger"
 
 	"ffmeditor/internal/config"
+	"ffmeditor/internal/ffmpeg"
 	"ffmeditor/internal/http"
 	"ffmeditor/internal/jobs"
+	"ffmeditor/internal/metrics"
 	"ffmeditor/internal/storage"
 )
 
@@ -17,6 +19,19 @@ func main() {
 	cfg := config.Load()
 
 	// Initialize components
+	metrics.Start()
+
+	// Detect hardware encoder once at startup.
+	if cfg.HWAccel != "none" {
+		hw := ffmpeg.DetectHardwareEncoder(cfg.FFmpegPath)
+		cfg.ResolvedHWEncoder = ffmpeg.HWEncoderCodec(hw)
+		if cfg.ResolvedHWEncoder != "" {
+			log.Printf("Hardware encoder detected: %s (%s)", hw, cfg.ResolvedHWEncoder)
+		} else {
+			log.Printf("No hardware encoder detected, using libx264")
+		}
+	}
+
 	store := storage.NewStorage(cfg.UploadDir)
 	jobManager := jobs.NewManager(cfg.Workers)
 	jobManager.Start()

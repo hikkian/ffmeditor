@@ -12,7 +12,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o ffmeditor-server ./cmd/server
 # Runtime stage
 FROM alpine:latest
 
-RUN apk add --no-cache ffmpeg ca-certificates
+RUN apk add --no-cache ffmpeg ca-certificates && \
+    apk add --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community nvidia-smi 2>/dev/null || true
 
 WORKDIR /app
 

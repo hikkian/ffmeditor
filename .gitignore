@@ -18,3 +18,6 @@ outputs/
 *.swo
 *~
 .idea/
+
+*.mp4
+*.avi
