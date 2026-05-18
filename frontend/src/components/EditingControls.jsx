@@ -8,6 +8,14 @@ const AUDIO_CODECS = ['copy', 'aac', 'libmp3lame', 'libopus', 'flac'];
 const PRESETS = ['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium', 'slow', 'slower', 'veryslow'];
 const AUDIO_ONLY_FORMATS = new Set(['mp3', 'aac', 'wav', 'flac', 'ogg', 'm4a']);
 
+function getAudioCodecOptions(format) {
+  const f = String(format || '').toLowerCase();
+  if (f === 'mov') {
+    return ['copy', 'aac', 'libmp3lame', 'flac'];
+  }
+  return AUDIO_CODECS;
+}
+
 function SelectField({ id, label, value, onChange, options }) {
   return (
     <div>
@@ -173,6 +181,7 @@ export default function EditingControls() {
   const setVolume       = useStore((s) => s.setVolume);
   const handleExport    = useStore((s) => s.handleExport);
   const audioOnlyFormat = AUDIO_ONLY_FORMATS.has(String(outputFormat || '').toLowerCase());
+  const audioCodecOptions = getAudioCodecOptions(outputFormat);
 
   const [systemMetrics, setSystemMetrics] = useState(null);
 
@@ -212,6 +221,12 @@ export default function EditingControls() {
       if (timer) window.clearInterval(timer);
     };
   }, []);
+
+  useEffect(() => {
+    if (String(outputFormat || '').toLowerCase() === 'mov' && audioCodec === 'libopus') {
+      setAudioCodec('aac');
+    }
+  }, [audioCodec, outputFormat, setAudioCodec]);
 
   const progressPct = Math.round(jobProgress * 100);
   const jobElapsed = currentJob?.elapsed_secs > 0 ? `${currentJob.elapsed_secs.toFixed(1)}s` : '...';
@@ -342,7 +357,7 @@ export default function EditingControls() {
           ) : (
             <>
               <SelectField id="video-codec-select" label="Video Codec" value={videoCodec} onChange={setVideoCodec} options={VIDEO_CODECS} />
-              <SelectField id="audio-codec-select" label="Audio Codec" value={audioCodec} onChange={setAudioCodec} options={AUDIO_CODECS} />
+              <SelectField id="audio-codec-select" label="Audio Codec" value={audioCodec} onChange={setAudioCodec} options={audioCodecOptions} />
               <SelectField id="preset-select" label="Preset" value={preset} onChange={setPreset} options={PRESETS} />
             </>
           )}

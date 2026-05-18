@@ -8,7 +8,6 @@ services:
     container_name: ffmeditor-converter
     ports:
       - "8080:8080"
-    runtime: nvidia
     volumes:
       - ./uploads:/app/uploads
       - ./outputs:/app/outputs
@@ -22,6 +21,13 @@ services:
       LOG_RING_BUFFER_SIZE: "200"
       NVIDIA_VISIBLE_DEVICES: "all"
       NVIDIA_DRIVER_CAPABILITIES: "compute,video,utility"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, video, compute, utility]
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/api/v1/health"]

@@ -200,23 +200,15 @@ export default function App() {
           className="flex-shrink-0 flex flex-col min-h-0 overflow-hidden"
           style={{ width: rightWidth, background: 'var(--color-bg-secondary)', borderLeft: '1px solid var(--color-border)' }}
         >
-          {showMetrics && (
-            <>
-              <div
-                className="flex-shrink-0"
-                style={{
-                  height: 'clamp(260px, 34vh, 360px)',
-                  borderBottom: '1px solid var(--color-border)',
-                }}
-              >
-                <MetricsPanel onClose={() => setShowMetrics(false)} />
-              </div>
-              <div className="h-px flex-shrink-0" style={{ background: 'var(--color-border)' }} />
-            </>
+          {showMetrics ? (
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <MetricsPanel onClose={() => setShowMetrics(false)} />
+            </div>
+          ) : (
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <EditingControls />
+            </div>
           )}
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <EditingControls />
-          </div>
         </aside>
       </div>
 

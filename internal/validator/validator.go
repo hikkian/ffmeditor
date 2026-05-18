@@ -57,6 +57,9 @@ func (r *ConvertRequest) Validate() error {
 	if r.AudioCodec != nil && !AllowedAudioCodecs[*r.AudioCodec] {
 		return fmt.Errorf("audio_codec not allowed: %s", *r.AudioCodec)
 	}
+	if strings.ToLower(r.OutputFormat) == "mov" && r.AudioCodec != nil && *r.AudioCodec == "libopus" {
+		return fmt.Errorf("audio_codec libopus is not supported for mov; use aac")
+	}
 	if r.CRF != nil && (*r.CRF < 18 || *r.CRF > 35) {
 		return fmt.Errorf("crf must be between 18 and 35")
 	}
@@ -139,6 +142,9 @@ func (r *TimelineExportRequest) Validate() error {
 	}
 	if r.AudioCodec != nil && !AllowedAudioCodecs[*r.AudioCodec] {
 		return fmt.Errorf("audio_codec not allowed: %s", *r.AudioCodec)
+	}
+	if strings.ToLower(r.OutputFormat) == "mov" && r.AudioCodec != nil && *r.AudioCodec == "libopus" {
+		return fmt.Errorf("audio_codec libopus is not supported for mov; use aac")
 	}
 	if r.Preset != nil && !AllowedPresets[*r.Preset] {
 		return fmt.Errorf("preset not allowed: %s", *r.Preset)

@@ -363,7 +363,7 @@ type TimelineExportOptions struct {
 	Brightness   *float64
 	Contrast     *float64
 	Volume       *float64
-	PresetMode string
+	PresetMode   string
 	// "fast" (default) = stream-copy + concat demuxer (keyframe-accurate, no re-encode).
 	// "precise" = filter_complex re-encode (frame-accurate, slower).
 	Mode string
@@ -671,17 +671,21 @@ func timelineExportReencode(ctx context.Context, opts TimelineExportOptions, ph 
 		fmt.Fprintf(&concatV, "[v%d]", i)
 
 		if hasAudio {
-			if opts.Volume != nil {
-				fmt.Fprintf(&fc, "[%d:a]volume=%f[a%d];", i, *opts.Volume, i)
+			if opts.Clips[i].HasAudio {
+				if opts.Volume != nil {
+					fmt.Fprintf(&fc, "[%d:a]volume=%f[a%d];", i, *opts.Volume, i)
+				} else {
+					fmt.Fprintf(&fc, "[%d:a]anull[a%d];", i, i)
+				}
 			} else {
-				fmt.Fprintf(&fc, "[%d:a]anull[a%d];", i, i)
+				fmt.Fprintf(&fc, "anullsrc=r=44100:cl=stereo:d=%.3f[a%d];", opts.Clips[i].Duration, i)
 			}
 			fmt.Fprintf(&concatA, "[a%d]", i)
 		}
 	}
 
 	if hasAudio {
-		fmt.Fprintf(&fc, "%s%sconcat=n=%d:v=1:a=1[outv][outa]", concatV.String(), concatA.String(), n)
+		fmt.Fprintf(&fc, "%sconcat=n=%d:v=1:a=0[outv];%sconcat=n=%d:v=0:a=1[outa]", concatV.String(), n, concatA.String(), n)
 	} else {
 		fmt.Fprintf(&fc, "%sconcat=n=%d:v=1:a=0[outv]", concatV.String(), n)
 	}
