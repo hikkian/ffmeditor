@@ -1,0 +1,6 @@
+frontend/node_modules
+uploads/
+outputs/
+*.exe
+tests/
+.git/

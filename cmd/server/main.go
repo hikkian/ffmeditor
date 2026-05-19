@@ -53,6 +53,12 @@ func main() {
 	handler := http.NewHandler(cfg, store, jobManager, opStore)
 	handler.RegisterRoutes(app)
 
+	// Serve React frontend
+	app.Static("/", "./frontend/dist")
+	app.Use(func(c *fiber.Ctx) error {
+		return c.SendFile("./frontend/dist/index.html")
+	})
+
 	// Start server
 	log.Printf("Starting server on port %s", cfg.Port)
 	log.Printf("Workers: %d, Upload limit: %d MB, Preset mode: %s", cfg.Workers, cfg.MaxUploadMB, cfg.PresetMode)
