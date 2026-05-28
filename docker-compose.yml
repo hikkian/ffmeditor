@@ -19,6 +19,10 @@ services:
       FFMPEG_PATH: "ffmpeg"
       FFPROBE_PATH: "ffprobe"
       LOG_RING_BUFFER_SIZE: "200"
+      AUTH_ENABLED: "true"
+      AUTH_USERNAME: "admin@gmail.com"
+      AUTH_PASSWORD: "password123"
+      AUTH_SECRET: "ffmeditor-secret-key-2024"
       NVIDIA_VISIBLE_DEVICES: "all"
       NVIDIA_DRIVER_CAPABILITIES: "compute,video,utility"
     deploy:

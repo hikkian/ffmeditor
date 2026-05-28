@@ -10,8 +10,11 @@ RUN npm run build
 FROM golang:1.21-alpine AS builder
 RUN apk add --no-cache git
 WORKDIR /build
-COPY . .
+# Copy only dependency files first — this layer is cached until go.mod/go.sum change
+COPY go.mod go.sum ./
 RUN go mod download
+# Now copy the rest of the source and build
+COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o ffmeditor-server ./cmd/server
 
 # Runtime stage

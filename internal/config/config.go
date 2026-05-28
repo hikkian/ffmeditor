@@ -1,10 +1,39 @@
 package config
 
 import (
+	"bufio"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
+
+// loadDotEnv reads key=value pairs from .env and sets them as env vars
+// (only if the variable is not already set in the environment).
+func loadDotEnv(path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		idx := strings.IndexByte(line, '=')
+		if idx < 1 {
+			continue
+		}
+		key := strings.TrimSpace(line[:idx])
+		val := strings.TrimSpace(line[idx+1:])
+		// Don't override values already set in the real environment
+		if _, exists := os.LookupEnv(key); !exists {
+			os.Setenv(key, val)
+		}
+	}
+}
 
 type Config struct {
 	Port              string
@@ -28,6 +57,8 @@ type Config struct {
 }
 
 func Load() *Config {
+	loadDotEnv(".env")
+
 	port := getEnv("PORT", "8080")
 	workers := getEnvInt("WORKERS", 1)
 	maxUploadMB := getEnvInt("MAX_UPLOAD_MB", 500)
