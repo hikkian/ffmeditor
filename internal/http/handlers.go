@@ -13,6 +13,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 
+	"ffmeditor/internal/auth"
 	"ffmeditor/internal/config"
 	"ffmeditor/internal/ffmpeg"
 	"ffmeditor/internal/jobs"
@@ -40,6 +41,15 @@ func NewHandler(cfg *config.Config, store *storage.Storage, jm *jobs.Manager, op
 func (h *Handler) RegisterRoutes(app *fiber.App) {
 	api := app.Group("/api/v1")
 
+	// Public endpoints (no auth required)
+	api.Get("/health", h.Health)
+	api.Post("/auth/login", h.Login)
+
+	// Optionally protect all other routes
+	if h.cfg.AuthEnabled {
+		api.Use(h.AuthMiddleware)
+	}
+
 	api.Post("/upload", h.Upload)
 	api.Post("/convert", h.Convert)
 	api.Post("/merge", h.Merge)
@@ -52,7 +62,50 @@ func (h *Handler) RegisterRoutes(app *fiber.App) {
 	api.Get("/metrics/system/current", h.MetricsSystem)
 	api.Get("/metrics/operations", h.MetricsOperations)
 	api.Get("/metrics/summary", h.MetricsSummary)
-	api.Get("/health", h.Health)
+	api.Get("/auth/me", h.Me)
+}
+
+// AuthMiddleware validates the Bearer token from Authorization header.
+func (h *Handler) AuthMiddleware(c *fiber.Ctx) error {
+	header := c.Get("Authorization")
+	if !strings.HasPrefix(header, "Bearer ") {
+		return c.Status(http.StatusUnauthorized).JSON(fiber.Map{"error": "unauthorized"})
+	}
+	token := strings.TrimPrefix(header, "Bearer ")
+	if !auth.ValidateToken(token, h.cfg.AuthSecret) {
+		return c.Status(http.StatusUnauthorized).JSON(fiber.Map{"error": "invalid or expired token"})
+	}
+	return c.Next()
+}
+
+// Login authenticates and returns a signed token.
+func (h *Handler) Login(c *fiber.Ctx) error {
+	var body struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := c.BodyParser(&body); err != nil {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "invalid request"})
+	}
+	if body.Username != h.cfg.AuthUsername || body.Password != h.cfg.AuthPassword {
+		return c.Status(http.StatusUnauthorized).JSON(fiber.Map{"error": "invalid credentials"})
+	}
+	token, err := auth.GenerateToken(h.cfg.AuthSecret)
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "token generation failed"})
+	}
+	return c.Status(http.StatusOK).JSON(fiber.Map{
+		"token":    token,
+		"username": body.Username,
+	})
+}
+
+// Me returns info about the currently authenticated user.
+func (h *Handler) Me(c *fiber.Ctx) error {
+	return c.Status(http.StatusOK).JSON(fiber.Map{
+		"username": h.cfg.AuthUsername,
+		"ok":       true,
+	})
 }
 
 // Upload handles multipart file uploads
@@ -235,6 +288,12 @@ func (h *Handler) performConvert(job *jobs.Job, uf *storage.UploadedFile, req *v
 		Brightness:    req.Brightness,
 		Contrast:      req.Contrast,
 		Volume:        req.Volume,
+		Speed:         req.Speed,
+		FadeIn:        req.FadeIn,
+		FadeOut:       req.FadeOut,
+		Normalize:     req.Normalize,
+		Bass:          req.Bass,
+		Treble:        req.Treble,
 	}
 
 	if isAudioOnlyOutputFormat(req.OutputFormat) {
@@ -599,6 +658,12 @@ func (h *Handler) performTimelineExport(job *jobs.Job, clips []ffmpeg.TimelineEx
 		Brightness:   req.Brightness,
 		Contrast:     req.Contrast,
 		Volume:       req.Volume,
+		Speed:        req.Speed,
+		FadeIn:       req.FadeIn,
+		FadeOut:      req.FadeOut,
+		Normalize:    req.Normalize,
+		Bass:         req.Bass,
+		Treble:       req.Treble,
 		PresetMode:   h.cfg.PresetMode,
 		Mode:         req.Mode,
 		HWEncoder:    h.cfg.ResolvedHWEncoder,

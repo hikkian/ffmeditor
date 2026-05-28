@@ -20,6 +20,11 @@ type Config struct {
 	HWAccel string
 	// ResolvedHWEncoder is set at startup after probing ffmpeg (e.g. "h264_nvenc", "h264_qsv", "").
 	ResolvedHWEncoder string
+	// Auth
+	AuthUsername string
+	AuthPassword string
+	AuthSecret   string
+	AuthEnabled  bool
 }
 
 func Load() *Config {
@@ -38,6 +43,11 @@ func Load() *Config {
 	os.MkdirAll(uploadDir, 0755)
 	os.MkdirAll(outputDir, 0755)
 
+	authUsername := getEnv("AUTH_USERNAME", "admin")
+	authPassword := getEnv("AUTH_PASSWORD", "changeme")
+	authSecret := getEnv("AUTH_SECRET", "ffmeditor-secret-key-change-in-production")
+	authEnabled := getEnv("AUTH_ENABLED", "true") == "true"
+
 	return &Config{
 		Port:              port,
 		Workers:           workers,
@@ -49,6 +59,10 @@ func Load() *Config {
 		OutputDir:         outputDir,
 		LogRingBufferSize: logRingBufferSize,
 		HWAccel:           hwAccel,
+		AuthUsername:      authUsername,
+		AuthPassword:      authPassword,
+		AuthSecret:        authSecret,
+		AuthEnabled:       authEnabled,
 	}
 }
 

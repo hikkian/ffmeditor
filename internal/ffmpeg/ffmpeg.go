@@ -237,6 +237,12 @@ type ConvertOptions struct {
 	Brightness    *float64
 	Contrast      *float64
 	Volume        *float64
+	Speed         *float64
+	FadeIn        *float64
+	FadeOut       *float64
+	Normalize     bool
+	Bass          *float64
+	Treble        *float64
 }
 
 func Convert(ctx context.Context, opts ConvertOptions, ph ProgressHandler) error {
@@ -286,6 +292,9 @@ func Convert(ctx context.Context, opts ConvertOptions, ph ProgressHandler) error
 			args = append(args, "-r", fmt.Sprintf("%d", *opts.FPS))
 		}
 		var vf []string
+		if opts.Speed != nil && *opts.Speed != 1.0 && *opts.Speed > 0 {
+			vf = append(vf, fmt.Sprintf("setpts=%.6f*PTS", 1.0/(*opts.Speed)))
+		}
 		if opts.ResizeWidth != nil || opts.ResizeHeight != nil {
 			if f := buildScaleFilter(opts); f != "" {
 				vf = append(vf, f)
@@ -311,11 +320,26 @@ func Convert(ctx context.Context, opts ConvertOptions, ph ProgressHandler) error
 		args = append(args, "-an")
 	} else {
 		args = append(args, "-c:a", resolveAudioCodec(outputFormat, opts.AudioCodec))
+		// FLAC requires integer samples at supported rates; normalize to 44100 stereo
+		if outputFormat == "flac" {
+			args = append(args, "-ar", "44100", "-ac", "2")
+		}
 		if opts.AudioBitrate != nil {
 			args = append(args, "-b:a", *opts.AudioBitrate)
 		}
-		if opts.Volume != nil {
-			args = append(args, "-af", fmt.Sprintf("volume=%f", *opts.Volume))
+		// Compute output duration for fade-out timing
+		outDur := 0.0
+		if opts.TrimDuration != nil && *opts.TrimDuration > 0 {
+			outDur = *opts.TrimDuration
+		} else if totalDuration != nil && *totalDuration > 0 {
+			outDur = *totalDuration
+		}
+		if opts.Speed != nil && *opts.Speed > 0 {
+			outDur /= *opts.Speed
+		}
+		afFilters := buildAudioFilterChain(opts.Volume, opts.Speed, opts.Normalize, opts.FadeIn, opts.FadeOut, opts.Bass, opts.Treble, outDur)
+		if len(afFilters) > 0 {
+			args = append(args, "-af", strings.Join(afFilters, ","))
 		}
 	}
 
@@ -363,6 +387,12 @@ type TimelineExportOptions struct {
 	Brightness   *float64
 	Contrast     *float64
 	Volume       *float64
+	Speed        *float64
+	FadeIn       *float64
+	FadeOut      *float64
+	Normalize    bool
+	Bass         *float64
+	Treble       *float64
 	PresetMode   string
 	// "fast" (default) = stream-copy + concat demuxer (keyframe-accurate, no re-encode).
 	// "precise" = filter_complex re-encode (frame-accurate, slower).
@@ -383,6 +413,24 @@ func CanStreamCopy(opts TimelineExportOptions) bool {
 		return false
 	}
 	if opts.Volume != nil {
+		return false
+	}
+	if opts.Speed != nil && *opts.Speed != 1.0 {
+		return false
+	}
+	if opts.FadeIn != nil && *opts.FadeIn > 0 {
+		return false
+	}
+	if opts.FadeOut != nil && *opts.FadeOut > 0 {
+		return false
+	}
+	if opts.Normalize {
+		return false
+	}
+	if opts.Bass != nil && *opts.Bass != 0 {
+		return false
+	}
+	if opts.Treble != nil && *opts.Treble != 0 {
 		return false
 	}
 	return true
@@ -410,29 +458,44 @@ func TimelineExport(ctx context.Context, opts TimelineExportOptions, ph Progress
 }
 
 func timelineExportAudioOnly(ctx context.Context, opts TimelineExportOptions, outputFormat string, ph ProgressHandler, onStage func(string)) error {
-	onStage("preparing")
+	stage := func(s string) {
+		if onStage != nil {
+			onStage(s)
+		}
+	}
+	stage("preparing")
 
 	if len(opts.Clips) == 1 {
 		clip := opts.Clips[0]
 		if !clip.HasAudio {
 			return fmt.Errorf("selected clip has no audio stream")
 		}
-		onStage("extracting audio")
+		stage("extracting audio")
+		outDur := clip.Duration
+		if opts.Speed != nil && *opts.Speed > 0 {
+			outDur /= *opts.Speed
+		}
+		audioCodec := resolveAudioCodec(outputFormat, opts.AudioCodec)
 		args := []string{
 			"-ss", fmt.Sprintf("%.6f", clip.SourceStart),
 			"-t", fmt.Sprintf("%.6f", clip.Duration),
 			"-i", clip.FilePath,
 			"-vn",
-			"-c:a", resolveAudioCodec(outputFormat, opts.AudioCodec),
+			"-c:a", audioCodec,
+		}
+		// FLAC requires integer samples at supported rates; normalize to 44100 stereo
+		if outputFormat == "flac" {
+			args = append(args, "-ar", "44100", "-ac", "2")
 		}
 		if opts.AudioBitrate != nil {
 			args = append(args, "-b:a", *opts.AudioBitrate)
 		}
-		if opts.Volume != nil {
-			args = append(args, "-af", fmt.Sprintf("volume=%f", *opts.Volume))
+		afFilters := buildAudioFilterChain(opts.Volume, opts.Speed, opts.Normalize, opts.FadeIn, opts.FadeOut, opts.Bass, opts.Treble, outDur)
+		if len(afFilters) > 0 {
+			args = append(args, "-af", strings.Join(afFilters, ","))
 		}
 		args = append(args, "-progress", "pipe:1", "-v", "warning", "-y", opts.OutputPath)
-		return runFFmpeg(ctx, opts.FFmpegPath, args, &clip.Duration, ph)
+		return runFFmpeg(ctx, opts.FFmpegPath, args, &outDur, ph)
 	}
 
 	totalDuration := 0.0
@@ -452,17 +515,35 @@ func timelineExportAudioOnly(ctx context.Context, opts TimelineExportOptions, ou
 	var fc, concatA strings.Builder
 	for i, clip := range opts.Clips {
 		if clip.HasAudio {
-			if opts.Volume != nil {
-				fmt.Fprintf(&fc, "[%d:a]aresample=44100,aformat=channel_layouts=stereo,volume=%f[a%d];", i, *opts.Volume, i)
-			} else {
-				fmt.Fprintf(&fc, "[%d:a]aresample=44100,aformat=channel_layouts=stereo[a%d];", i, i)
+			clipFilters := []string{"aresample=44100", "aformat=channel_layouts=stereo"}
+			if opts.Volume != nil && *opts.Volume != 1.0 {
+				clipFilters = append(clipFilters, fmt.Sprintf("volume=%f", *opts.Volume))
 			}
+			if opts.Speed != nil && *opts.Speed != 1.0 && *opts.Speed > 0 {
+				clipFilters = append(clipFilters, buildAtempoChain(*opts.Speed)...)
+			}
+			fmt.Fprintf(&fc, "[%d:a]%s[a%d];", i, strings.Join(clipFilters, ","), i)
 		} else {
-			fmt.Fprintf(&fc, "anullsrc=r=44100:cl=stereo:d=%.3f[a%d];", clip.Duration, i)
+			silenceDur := clip.Duration
+			if opts.Speed != nil && *opts.Speed > 0 {
+				silenceDur /= *opts.Speed
+			}
+			fmt.Fprintf(&fc, "anullsrc=r=44100:cl=stereo:d=%.3f[a%d];", silenceDur, i)
 		}
 		fmt.Fprintf(&concatA, "[a%d]", i)
 	}
-	fmt.Fprintf(&fc, "%sconcat=n=%d:v=0:a=1[outa]", concatA.String(), len(opts.Clips))
+
+	// Apply global post-concat audio effects (normalize, fade, bass, treble)
+	totalOutputDuration := totalDuration
+	if opts.Speed != nil && *opts.Speed > 0 {
+		totalOutputDuration /= *opts.Speed
+	}
+	globalFilters := buildGlobalAudioFilters(opts.Normalize, opts.FadeIn, opts.FadeOut, opts.Bass, opts.Treble, totalOutputDuration)
+	if len(globalFilters) > 0 {
+		fmt.Fprintf(&fc, "%sconcat=n=%d:v=0:a=1[outa_pre];[outa_pre]%s[outa]", concatA.String(), len(opts.Clips), strings.Join(globalFilters, ","))
+	} else {
+		fmt.Fprintf(&fc, "%sconcat=n=%d:v=0:a=1[outa]", concatA.String(), len(opts.Clips))
+	}
 
 	args = append(args, "-filter_complex", fc.String(), "-map", "[outa]")
 	args = append(args, "-c:a", resolveAudioCodec(outputFormat, opts.AudioCodec))
@@ -471,8 +552,8 @@ func timelineExportAudioOnly(ctx context.Context, opts TimelineExportOptions, ou
 	}
 	args = append(args, "-progress", "pipe:1", "-v", "warning", "-y", opts.OutputPath)
 
-	onStage("encoding")
-	return runFFmpeg(ctx, opts.FFmpegPath, args, &totalDuration, ph)
+	stage("encoding")
+	return runFFmpeg(ctx, opts.FFmpegPath, args, &totalOutputDuration, ph)
 }
 
 // timelineExportFast extracts each segment with -c copy, then uses the concat
@@ -628,6 +709,9 @@ func timelineExportReencode(ctx context.Context, opts TimelineExportOptions, ph 
 
 	// Build per-clip video filter.
 	var vfParts []string
+	if opts.Speed != nil && *opts.Speed != 1.0 && *opts.Speed > 0 {
+		vfParts = append(vfParts, fmt.Sprintf("setpts=%.6f*PTS", 1.0/(*opts.Speed)))
+	}
 	if opts.ResizeWidth != nil || opts.ResizeHeight != nil {
 		w, h := -1, -1
 		if opts.ResizeWidth != nil {
@@ -672,19 +756,40 @@ func timelineExportReencode(ctx context.Context, opts TimelineExportOptions, ph 
 
 		if hasAudio {
 			if opts.Clips[i].HasAudio {
-				if opts.Volume != nil {
-					fmt.Fprintf(&fc, "[%d:a]volume=%f[a%d];", i, *opts.Volume, i)
+				var clipAF []string
+				if opts.Volume != nil && *opts.Volume != 1.0 {
+					clipAF = append(clipAF, fmt.Sprintf("volume=%f", *opts.Volume))
+				}
+				if opts.Speed != nil && *opts.Speed != 1.0 && *opts.Speed > 0 {
+					clipAF = append(clipAF, buildAtempoChain(*opts.Speed)...)
+				}
+				if len(clipAF) > 0 {
+					fmt.Fprintf(&fc, "[%d:a]%s[a%d];", i, strings.Join(clipAF, ","), i)
 				} else {
 					fmt.Fprintf(&fc, "[%d:a]anull[a%d];", i, i)
 				}
 			} else {
-				fmt.Fprintf(&fc, "anullsrc=r=44100:cl=stereo:d=%.3f[a%d];", opts.Clips[i].Duration, i)
+				silenceDur := opts.Clips[i].Duration
+				if opts.Speed != nil && *opts.Speed > 0 {
+					silenceDur /= *opts.Speed
+				}
+				fmt.Fprintf(&fc, "anullsrc=r=44100:cl=stereo:d=%.3f[a%d];", silenceDur, i)
 			}
 			fmt.Fprintf(&concatA, "[a%d]", i)
 		}
 	}
 
-	if hasAudio {
+	// Apply global post-concat audio effects (normalize, fade, bass, treble)
+	totalOutputDuration := totalDuration
+	if opts.Speed != nil && *opts.Speed > 0 {
+		totalOutputDuration /= *opts.Speed
+	}
+	globalAF := buildGlobalAudioFilters(opts.Normalize, opts.FadeIn, opts.FadeOut, opts.Bass, opts.Treble, totalOutputDuration)
+
+	if hasAudio && len(globalAF) > 0 {
+		fmt.Fprintf(&fc, "%sconcat=n=%d:v=1:a=0[outv];%sconcat=n=%d:v=0:a=1[outa_pre];[outa_pre]%s[outa]",
+			concatV.String(), n, concatA.String(), n, strings.Join(globalAF, ","))
+	} else if hasAudio {
 		fmt.Fprintf(&fc, "%sconcat=n=%d:v=1:a=0[outv];%sconcat=n=%d:v=0:a=1[outa]", concatV.String(), n, concatA.String(), n)
 	} else {
 		fmt.Fprintf(&fc, "%sconcat=n=%d:v=1:a=0[outv]", concatV.String(), n)
@@ -1087,6 +1192,61 @@ func buildScaleFilter(opts ConvertOptions) string {
 		return fmt.Sprintf("scale=%d:-2", w)
 	}
 	return fmt.Sprintf("scale=-2:%d", h)
+}
+
+// buildAtempoChain produces a chain of atempo filters to achieve the target speed.
+// atempo only accepts values in [0.5, 2.0], so we chain multiple filters for
+// speeds outside that range (e.g., 4x = atempo=2.0,atempo=2.0).
+func buildAtempoChain(speed float64) []string {
+	var filters []string
+	s := speed
+	for s > 2.0 {
+		filters = append(filters, "atempo=2.0")
+		s /= 2.0
+	}
+	for s < 0.5 {
+		filters = append(filters, "atempo=0.5")
+		s /= 0.5
+	}
+	if math.Abs(s-1.0) > 0.001 {
+		filters = append(filters, fmt.Sprintf("atempo=%.6f", s))
+	}
+	return filters
+}
+
+// buildGlobalAudioFilters builds post-concat audio effects applied to the whole output.
+func buildGlobalAudioFilters(normalize bool, fadeIn, fadeOut, bass, treble *float64, outputDuration float64) []string {
+	var filters []string
+	if normalize {
+		filters = append(filters, "loudnorm")
+	}
+	if fadeIn != nil && *fadeIn > 0 {
+		filters = append(filters, fmt.Sprintf("afade=t=in:st=0:d=%.3f", *fadeIn))
+	}
+	if fadeOut != nil && *fadeOut > 0 && outputDuration > 0 {
+		st := math.Max(0, outputDuration-*fadeOut)
+		filters = append(filters, fmt.Sprintf("afade=t=out:st=%.3f:d=%.3f", st, *fadeOut))
+	}
+	if bass != nil && math.Abs(*bass) > 0.01 {
+		filters = append(filters, fmt.Sprintf("equalizer=f=100:t=o:width_type=o:width=2:g=%.2f", *bass))
+	}
+	if treble != nil && math.Abs(*treble) > 0.01 {
+		filters = append(filters, fmt.Sprintf("equalizer=f=3000:t=o:width_type=o:width=2:g=%.2f", *treble))
+	}
+	return filters
+}
+
+// buildAudioFilterChain builds the complete -af filter string for single-file operations.
+func buildAudioFilterChain(volume, speed *float64, normalize bool, fadeIn, fadeOut, bass, treble *float64, outputDuration float64) []string {
+	var filters []string
+	if volume != nil && math.Abs(*volume-1.0) > 0.001 {
+		filters = append(filters, fmt.Sprintf("volume=%f", *volume))
+	}
+	if speed != nil && *speed != 1.0 && *speed > 0 {
+		filters = append(filters, buildAtempoChain(*speed)...)
+	}
+	filters = append(filters, buildGlobalAudioFilters(normalize, fadeIn, fadeOut, bass, treble, outputDuration)...)
+	return filters
 }
 
 // Ensure hwCodecName is used; exported for potential handler use.

@@ -39,6 +39,12 @@ type ConvertRequest struct {
 	Brightness    *float64 `json:"brightness"`
 	Contrast      *float64 `json:"contrast"`
 	Volume        *float64 `json:"volume"`
+	Speed         *float64 `json:"speed"`
+	FadeIn        *float64 `json:"fade_in"`
+	FadeOut       *float64 `json:"fade_out"`
+	Normalize     bool     `json:"normalize"`
+	Bass          *float64 `json:"bass"`
+	Treble        *float64 `json:"treble"`
 }
 
 func (r *ConvertRequest) Validate() error {
@@ -84,6 +90,21 @@ func (r *ConvertRequest) Validate() error {
 	if r.FitMode != nil && !AllowedFitModes[*r.FitMode] {
 		return fmt.Errorf("fit_mode not allowed: %s", *r.FitMode)
 	}
+	if r.Speed != nil && (*r.Speed < 0.25 || *r.Speed > 4.0) {
+		return fmt.Errorf("speed must be between 0.25 and 4.0")
+	}
+	if r.FadeIn != nil && (*r.FadeIn < 0 || *r.FadeIn > 30) {
+		return fmt.Errorf("fade_in must be between 0 and 30 seconds")
+	}
+	if r.FadeOut != nil && (*r.FadeOut < 0 || *r.FadeOut > 30) {
+		return fmt.Errorf("fade_out must be between 0 and 30 seconds")
+	}
+	if r.Bass != nil && (*r.Bass < -20 || *r.Bass > 20) {
+		return fmt.Errorf("bass must be between -20 and 20 dB")
+	}
+	if r.Treble != nil && (*r.Treble < -20 || *r.Treble > 20) {
+		return fmt.Errorf("treble must be between -20 and 20 dB")
+	}
 	return nil
 }
 
@@ -113,6 +134,12 @@ type TimelineExportRequest struct {
 	Brightness   *float64       `json:"brightness"`
 	Contrast     *float64       `json:"contrast"`
 	Volume       *float64       `json:"volume"`
+	Speed        *float64       `json:"speed"`
+	FadeIn       *float64       `json:"fade_in"`
+	FadeOut      *float64       `json:"fade_out"`
+	Normalize    bool           `json:"normalize"`
+	Bass         *float64       `json:"bass"`
+	Treble       *float64       `json:"treble"`
 	Mode         string         `json:"mode"`
 }
 
@@ -154,6 +181,21 @@ func (r *TimelineExportRequest) Validate() error {
 	}
 	if r.Mode != "" && r.Mode != "fast" && r.Mode != "precise" {
 		return fmt.Errorf("mode must be 'fast' or 'precise'")
+	}
+	if r.Speed != nil && (*r.Speed < 0.25 || *r.Speed > 4.0) {
+		return fmt.Errorf("speed must be between 0.25 and 4.0")
+	}
+	if r.FadeIn != nil && (*r.FadeIn < 0 || *r.FadeIn > 30) {
+		return fmt.Errorf("fade_in must be between 0 and 30 seconds")
+	}
+	if r.FadeOut != nil && (*r.FadeOut < 0 || *r.FadeOut > 30) {
+		return fmt.Errorf("fade_out must be between 0 and 30 seconds")
+	}
+	if r.Bass != nil && (*r.Bass < -20 || *r.Bass > 20) {
+		return fmt.Errorf("bass must be between -20 and 20 dB")
+	}
+	if r.Treble != nil && (*r.Treble < -20 || *r.Treble > 20) {
+		return fmt.Errorf("treble must be between -20 and 20 dB")
 	}
 	return nil
 }

@@ -13,13 +13,16 @@ export default function VideoPreview() {
   const setVideoDuration = useStore((s) => s.setVideoDuration);
 
   const videoRef    = useRef(null);
+  const audioRef    = useRef(null);
   const previewRef  = useRef(null);
   const playingClipRef = useRef(null);
   const gapClockRef    = useRef(null);
+  const isDraggingSeekRef = useRef(false);
 
   const [isTimelinePlaying, setIsTimelinePlaying] = useState(false);
   const [currentTime, setLocalCurrentTime] = useState(0);
   const [duration, setLocalDuration]       = useState(0);
+  const [isAudioOnly, setIsAudioOnly]      = useState(false);
   const [volume, setVolume]     = useState(1);
   const [isMuted, setIsMuted]   = useState(false);
   const [isMediaReady, setIsMediaReady] = useState(false);
@@ -53,6 +56,17 @@ export default function VideoPreview() {
 
     const tick = () => {
       frameCount++;
+
+      // Audio-only: simple time sync from audio element
+      if (isAudioOnly) {
+        const aud = audioRef.current;
+        if (aud && frameCount % 4 === 0) {
+          setCurrentTime(aud.currentTime);
+        }
+        rafId = requestAnimationFrame(tick);
+        return;
+      }
+
       const vid = videoRef.current;
       if (!vid) { rafId = requestAnimationFrame(tick); return; }
 
@@ -107,88 +121,95 @@ export default function VideoPreview() {
 
     rafId = requestAnimationFrame(tick);
     return () => { if (rafId) cancelAnimationFrame(rafId); };
-  }, [isTimelinePlaying, setCurrentTime]);
+  }, [isAudioOnly, isTimelinePlaying, setCurrentTime]);
 
   const togglePlay = useCallback(() => {
-    const vid = videoRef.current;
-    if (!vid || !videoUrl) return;
+    const media = isAudioOnly ? audioRef.current : videoRef.current;
+    if (!media || !videoUrl) return;
 
     if (isTimelinePlaying) {
       gapClockRef.current = null;
       setIsTimelinePlaying(false);
-      vid.pause();
-      syncStoreTimeFromVideo(vid.currentTime);
+      media.pause();
+      syncStoreTimeFromVideo(media.currentTime);
       return;
     }
 
-    const state      = useStore.getState();
-    const activeClip = state.clips.find((c) => c.id === state.activeClipId);
-    if (activeClip) {
-      playingClipRef.current = activeClip;
-      const outside = vid.currentTime < activeClip.sourceStart
-        || vid.currentTime >= activeClip.sourceStart + activeClip.sourceDuration;
-      if (outside) { try { vid.currentTime = activeClip.sourceStart; } catch {} }
-    } else {
-      playingClipRef.current = null;
+    if (!isAudioOnly) {
+      const state      = useStore.getState();
+      const activeClip = state.clips.find((c) => c.id === state.activeClipId);
+      if (activeClip) {
+        playingClipRef.current = activeClip;
+        const outside = media.currentTime < activeClip.sourceStart
+          || media.currentTime >= activeClip.sourceStart + activeClip.sourceDuration;
+        if (outside) { try { media.currentTime = activeClip.sourceStart; } catch {} }
+      } else {
+        playingClipRef.current = null;
+      }
     }
 
     gapClockRef.current = null;
     setIsTimelinePlaying(true);
-    vid.play().catch((err) => {
+    media.play().catch((err) => {
       debugError('VideoPreview.togglePlay', 'play failed', { message: err?.message });
       setIsTimelinePlaying(false);
     });
-  }, [isTimelinePlaying, syncStoreTimeFromVideo, videoUrl]);
+  }, [isAudioOnly, isTimelinePlaying, syncStoreTimeFromVideo, videoUrl]);
 
   const stopPlayback = useCallback(() => {
     gapClockRef.current  = null;
     playingClipRef.current = null;
     setIsTimelinePlaying(false);
-    const vid = videoRef.current;
-    if (!vid) return;
-    vid.pause();
+    const media = isAudioOnly ? audioRef.current : videoRef.current;
+    if (!media) return;
+    media.pause();
     const nextVideoTime = getClipStartVideoTime();
-    try { vid.currentTime = nextVideoTime; } catch {}
+    try { media.currentTime = nextVideoTime; } catch {}
     setLocalCurrentTime(nextVideoTime);
     syncStoreTimeFromVideo(nextVideoTime);
-  }, [getClipStartVideoTime, syncStoreTimeFromVideo]);
+  }, [getClipStartVideoTime, isAudioOnly, syncStoreTimeFromVideo]);
 
   const resetPlaybackToStart = useCallback(() => {
     gapClockRef.current = null;
     playingClipRef.current = null;
     setIsTimelinePlaying(false);
-    const vid = videoRef.current;
-    if (!vid) return;
+    const media = isAudioOnly ? audioRef.current : videoRef.current;
+    if (!media) return;
     const nextVideoTime = getClipStartVideoTime();
-    try { vid.pause(); } catch {}
-    try { vid.currentTime = nextVideoTime; } catch {}
+    try { media.pause(); } catch {}
+    try { media.currentTime = nextVideoTime; } catch {}
     setLocalCurrentTime(nextVideoTime);
     syncStoreTimeFromVideo(nextVideoTime);
-  }, [getClipStartVideoTime, syncStoreTimeFromVideo]);
+  }, [getClipStartVideoTime, isAudioOnly, syncStoreTimeFromVideo]);
 
   const handleTimeUpdate = useCallback(() => {
-    const vid = videoRef.current;
-    if (!vid) return;
-    const nextVideoTime = vid.currentTime;
+    if (isDraggingSeekRef.current) return;
+    const media = isAudioOnly ? audioRef.current : videoRef.current;
+    if (!media) return;
+    const nextVideoTime = media.currentTime;
     setLocalCurrentTime(nextVideoTime);
     if (!isTimelinePlaying) {
       syncStoreTimeFromVideo(nextVideoTime);
     }
-  }, [isTimelinePlaying, syncStoreTimeFromVideo]);
+  }, [isAudioOnly, isTimelinePlaying, syncStoreTimeFromVideo]);
 
   const handleLoadedMetadata = useCallback(() => {
-    const vid = videoRef.current;
-    if (!vid) return;
-    debugLog('VideoPreview', 'loadedmetadata', { duration: vid.duration });
-    setLocalDuration(vid.duration || 0);
-    setVideoDuration(vid.duration || 0);
+    const media = isAudioOnly ? audioRef.current : videoRef.current;
+    if (!media) return;
+    // Use browser duration; fall back to server-provided duration for unusual codecs
+    const browserDur = isFinite(media.duration) && media.duration > 0 ? media.duration : 0;
+    const serverDur = useStore.getState().videoDuration || 0;
+    const dur = browserDur > 0 ? browserDur : serverDur;
+    debugLog('VideoPreview', 'loadedmetadata', { browserDur, serverDur, dur, isAudioOnly });
+    setLocalDuration(dur);
+    setVideoDuration(dur);
     setIsMediaReady(false);
     setDecodeError(false);
     const nextVideoTime = getClipStartVideoTime();
-    try { vid.currentTime = nextVideoTime; } catch {}
+    try { media.currentTime = nextVideoTime; } catch {}
     setLocalCurrentTime(nextVideoTime);
     syncStoreTimeFromVideo(nextVideoTime);
-  }, [getClipStartVideoTime, setVideoDuration, syncStoreTimeFromVideo]);
+  }, [getClipStartVideoTime, isAudioOnly, setVideoDuration, syncStoreTimeFromVideo]);
 
   const handleLoadedData  = useCallback(() => { setIsMediaReady(true); setDecodeError(false); }, []);
   const handleError       = useCallback(() => {
@@ -203,31 +224,42 @@ export default function VideoPreview() {
     try { videoRef.current?.pause(); } catch {}
   }, []);
 
+  const handleSeekStart = useCallback(() => {
+    isDraggingSeekRef.current = true;
+  }, []);
+
   const handleSeek = useCallback((e) => {
-    const vid = videoRef.current;
-    if (!vid) return;
     const time = parseFloat(e.target.value);
-    try { vid.currentTime = time; } catch {}
     setLocalCurrentTime(time);
+    const media = isAudioOnly ? audioRef.current : videoRef.current;
+    if (!media) return;
+    try { media.currentTime = time; } catch {}
     syncStoreTimeFromVideo(time);
-  }, [syncStoreTimeFromVideo]);
+  }, [isAudioOnly, syncStoreTimeFromVideo]);
+
+  const handleSeekEnd = useCallback(() => {
+    isDraggingSeekRef.current = false;
+    const media = isAudioOnly ? audioRef.current : videoRef.current;
+    if (!media) return;
+    syncStoreTimeFromVideo(media.currentTime);
+  }, [isAudioOnly, syncStoreTimeFromVideo]);
 
   const toggleMute = useCallback(() => {
-    const vid = videoRef.current;
-    if (!vid) return;
-    vid.muted = !vid.muted;
-    setIsMuted(vid.muted);
-  }, []);
+    const media = isAudioOnly ? audioRef.current : videoRef.current;
+    if (!media) return;
+    media.muted = !media.muted;
+    setIsMuted(media.muted);
+  }, [isAudioOnly]);
 
   const handleVolumeChange = useCallback((e) => {
-    const vid = videoRef.current;
-    if (!vid) return;
+    const media = isAudioOnly ? audioRef.current : videoRef.current;
+    if (!media) return;
     const v = parseFloat(e.target.value);
-    vid.volume = v;
-    vid.muted  = v === 0;
+    media.volume = v;
+    media.muted  = v === 0;
     setVolume(v);
     setIsMuted(v === 0);
-  }, []);
+  }, [isAudioOnly]);
 
   const toggleFullscreen = useCallback(() => {
     if (!previewRef.current) return;
@@ -247,11 +279,18 @@ export default function VideoPreview() {
   }, []);
 
   useEffect(() => {
-    const vid = videoRef.current;
-    if (!vid) return;
-    vid.volume = volume;
-    vid.muted  = isMuted || volume === 0;
-  }, [volume, isMuted]);
+    const media = isAudioOnly ? audioRef.current : videoRef.current;
+    if (!media) return;
+    media.volume = volume;
+    media.muted  = isMuted || volume === 0;
+  }, [isAudioOnly, volume, isMuted]);
+
+  // Detect audio-only mode from active file
+  useEffect(() => {
+    const state = useStore.getState();
+    const file = state.files.find((f) => f.id === state.activeFileId);
+    setIsAudioOnly(!!file && !file.hasVideo && file.hasAudio);
+  }, [activeFile]);
 
   useEffect(() => {
     const vid = videoRef.current;
@@ -332,6 +371,56 @@ export default function VideoPreview() {
       <div ref={previewRef} className="preview-stage flex-1 flex items-center justify-center relative overflow-hidden">
         {videoUrl ? (
           <div className="w-full h-full flex items-center justify-center relative">
+
+            {/* Audio-only player */}
+            {isAudioOnly ? (
+              <div className="flex flex-col items-center justify-center gap-4 w-full px-6">
+                <audio
+                  key={videoUrl}
+                  ref={audioRef}
+                  src={videoUrl}
+                  preload="auto"
+                  className="hidden"
+                  onTimeUpdate={handleTimeUpdate}
+                  onLoadedMetadata={handleLoadedMetadata}
+                  onLoadedData={handleLoadedData}
+                  onError={handleError}
+                  onEnded={resetPlaybackToStart}
+                />
+                {/* Waveform / audio visualization */}
+                <div className="w-16 h-16 rounded-2xl flex items-center justify-center" style={{ background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.2)' }}>
+                  <svg className="w-8 h-8" style={{ color: '#f59e0b' }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" />
+                  </svg>
+                </div>
+                {/* Animated equalizer bars while playing */}
+                <div className="flex items-end gap-1 h-10">
+                  {Array.from({ length: 20 }, (_, i) => (
+                    <div
+                      key={i}
+                      className="w-1.5 rounded-full"
+                      style={{
+                        height: isTimelinePlaying ? `${20 + Math.sin(i * 0.8 + Date.now() * 0.003) * 14 + 14}%` : `${10 + Math.sin(i * 0.5) * 8 + 8}%`,
+                        background: isTimelinePlaying ? 'linear-gradient(to top, #f59e0b, #fb923c)' : 'var(--color-border-light)',
+                        minHeight: 4,
+                        transition: isTimelinePlaying ? 'none' : 'all 0.3s',
+                      }}
+                    />
+                  ))}
+                </div>
+                <p className="text-xs font-medium" style={{ color: 'var(--color-text-secondary)' }}>{displayName}</p>
+                {!isMediaReady && (
+                  <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4 animate-spin text-[var(--color-accent)]" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                    </svg>
+                    <span className="text-xs text-[var(--color-text-secondary)]">Loading…</span>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <>
             <video
               key={videoUrl}
               ref={videoRef}
@@ -397,6 +486,8 @@ export default function VideoPreview() {
                 </div>
               </div>
             )}
+              </>
+            )}
           </div>
         ) : (
           <div className="flex flex-col items-center justify-center text-center px-8">
@@ -423,7 +514,11 @@ export default function VideoPreview() {
                 max={duration || 0}
                 step={0.01}
                 value={currentTime}
+                onMouseDown={handleSeekStart}
                 onChange={handleSeek}
+                onMouseUp={handleSeekEnd}
+                onTouchStart={handleSeekStart}
+                onTouchEnd={handleSeekEnd}
                 className="w-full h-1"
               />
             </div>

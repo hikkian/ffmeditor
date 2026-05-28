@@ -5,7 +5,9 @@ import Timeline from './components/Timeline';
 import EditingControls from './components/EditingControls';
 import MetricsPanel from './components/MetricsPanel';
 import ErrorToast from './components/ErrorToast';
+import LoginPage from './components/LoginPage';
 import useStore from './store';
+import { getStoredToken, setStoredToken, getMe } from './api';
 
 const MIN_LEFT = 220; const MAX_LEFT = 420;
 const MIN_RIGHT = 260; const MAX_RIGHT = 480;
@@ -81,6 +83,27 @@ export default function App() {
   const downloadReady = useStore((s) => s.downloadReady);
 
   const [theme, setTheme] = useState(() => localStorage.getItem('ffm-theme') || 'dark');
+  const [authReady, setAuthReady] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+
+  // Check stored token on mount; if valid, skip login
+  useEffect(() => {
+    const token = getStoredToken();
+    if (!token) { setAuthReady(true); return; }
+    getMe()
+      .then(() => { setIsAuthenticated(true); setAuthReady(true); })
+      .catch(() => { setStoredToken(null); setAuthReady(true); });
+  }, []);
+
+  const handleLogin = useCallback((token) => {
+    setStoredToken(token);
+    setIsAuthenticated(true);
+  }, []);
+
+  const handleLogout = useCallback(() => {
+    setStoredToken(null);
+    setIsAuthenticated(false);
+  }, []);
   const [leftWidth, setLeftWidth]   = useState(280);
   const [rightWidth, setRightWidth] = useState(320);
   const [timelineH, setTimelineH]   = useState(210);
@@ -121,6 +144,25 @@ export default function App() {
     : isExporting
     ? { dot: 'var(--color-accent)', text: 'Exporting', bg: 'var(--color-accent-muted)', border: 'var(--color-accent-border)', color: 'var(--color-accent)' }
     : { dot: 'var(--color-text-muted)', text: 'Editing', bg: 'var(--color-bg-tertiary)', border: 'var(--color-border)', color: 'var(--color-text-secondary)' };
+
+  if (!authReady) {
+    return (
+      <div className="h-screen w-screen flex items-center justify-center" style={{ background: 'var(--color-bg-primary)' }}>
+        <svg className="w-6 h-6 animate-spin" style={{ color: '#f59e0b' }} fill="none" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+        </svg>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div data-theme={theme}>
+        <LoginPage onLogin={handleLogin} />
+      </div>
+    );
+  }
 
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden" style={{ background: 'var(--color-bg-primary)' }}>
@@ -163,6 +205,23 @@ export default function App() {
             <span className="text-[10px] font-medium">Metrics</span>
           </button>
           <ThemeToggle theme={theme} onToggle={toggleTheme} />
+          <button
+            onClick={handleLogout}
+            title="Sign out"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-all"
+            style={{
+              background: 'var(--color-bg-tertiary)',
+              border: '1px solid var(--color-border)',
+              color: 'var(--color-text-secondary)',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#ef4444'; e.currentTarget.style.color = '#ef4444'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--color-border)'; e.currentTarget.style.color = 'var(--color-text-secondary)'; }}
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75" />
+            </svg>
+            <span className="text-[10px] font-medium">Logout</span>
+          </button>
           <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md"
             style={{ background: badge.bg, border: `1px solid ${badge.border}` }}
           >

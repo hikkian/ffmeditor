@@ -88,6 +88,12 @@ const useStore = create((set, get) => ({
   brightness: 0,
   contrast: 1.0,
   volume: 1.0,
+  speed: 1.0,
+  fadeIn: 0,
+  fadeOut: 0,
+  normalize: false,
+  bass: 0,
+  treble: 0,
 
   // === Export / Job State ===
   isUploading: false,
@@ -281,6 +287,12 @@ const useStore = create((set, get) => ({
   setBrightness: (v) => set({ brightness: v }),
   setContrast: (v) => set({ contrast: v }),
   setVolume: (v) => set({ volume: v }),
+  setSpeed: (v) => set({ speed: v }),
+  setFadeIn: (v) => set({ fadeIn: v }),
+  setFadeOut: (v) => set({ fadeOut: v }),
+  setNormalize: (v) => set({ normalize: v }),
+  setBass: (v) => set({ bass: v }),
+  setTreble: (v) => set({ treble: v }),
 
   // === Upload ===
   handleUpload: async (file) => {
@@ -306,11 +318,21 @@ const useStore = create((set, get) => ({
         let settled = false;
 
         const cleanup = () => {
+          clearTimeout(probeTimeout);
           vid.onloadedmetadata = null;
           vid.onerror = null;
           URL.revokeObjectURL(metadataUrl);
           vid.src = '';
         };
+
+        // 8-second timeout in case the browser hangs on unusual codecs
+        const probeTimeout = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          debugWarn('store.handleUpload', 'metadata probe timed out');
+          resolve({ width: 0, height: 0 });
+          cleanup();
+        }, 8000);
 
         vid.onloadedmetadata = () => {
           if (settled) return;
@@ -697,6 +719,12 @@ const useStore = create((set, get) => ({
         mode: 'fast',
         audio_bitrate: state.audioBitrate ? state.audioBitrate.toString() : undefined,
         volume: state.volume !== 1.0 ? state.volume : undefined,
+        speed: state.speed !== 1.0 ? state.speed : undefined,
+        fade_in: state.fadeIn > 0 ? state.fadeIn : undefined,
+        fade_out: state.fadeOut > 0 ? state.fadeOut : undefined,
+        normalize: state.normalize || undefined,
+        bass: state.bass !== 0 ? state.bass : undefined,
+        treble: state.treble !== 0 ? state.treble : undefined,
         clips: [...state.clips]
           .sort((a, b) => a.timelineStart - b.timelineStart)
           .map((clip) => ({

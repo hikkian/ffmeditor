@@ -1,9 +1,39 @@
 import axios from 'axios';
 
+const TOKEN_KEY = 'ffm-auth-token';
+
+export function getStoredToken() {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function setStoredToken(token) {
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+}
+
 const api = axios.create({
   baseURL: '/api/v1',
   timeout: 120000,
 });
+
+// Attach token to every request
+api.interceptors.request.use((config) => {
+  const token = getStoredToken();
+  if (token) config.headers['Authorization'] = `Bearer ${token}`;
+  return config;
+});
+
+// On 401, clear token and reload to show login
+api.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    if (err.response?.status === 401) {
+      setStoredToken(null);
+      window.location.reload();
+    }
+    return Promise.reject(err);
+  },
+);
 
 export async function uploadFile(file, onProgress) {
   const formData = new FormData();
@@ -58,6 +88,16 @@ export function getDownloadUrl(jobId) {
 
 export async function deleteFile(fileId) {
   const res = await api.delete(`/files/${fileId}`);
+  return res.data;
+}
+
+export async function login(username, password) {
+  const res = await api.post('/auth/login', { username, password });
+  return res.data;
+}
+
+export async function getMe() {
+  const res = await api.get('/auth/me');
   return res.data;
 }
 
