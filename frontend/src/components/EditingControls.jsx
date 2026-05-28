@@ -1,6 +1,74 @@
-import { useEffect, useState } from 'react';
-import { getMetricsSystem } from '../api';
+import { useEffect, useState, useCallback } from 'react';
+import { getMetricsSystem, getStoredToken } from '../api';
 import useStore from '../store';
+
+function DownloadButton({ getDownloadLink }) {
+  const setError = useStore((s) => s.setError);
+  const [downloading, setDownloading] = useState(false);
+
+  const handleDownload = useCallback(async () => {
+    const url = getDownloadLink();
+    if (!url) return;
+    setDownloading(true);
+    try {
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${getStoredToken() || ''}` },
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `Server error ${res.status}`);
+      }
+      const disposition = res.headers.get('content-disposition') || '';
+      const match = disposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+      const filename = match ? match[1].replace(/['"]/g, '') : 'output';
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (err) {
+      setError(err.message === 'Job not found'
+        ? 'File expired — please export again'
+        : err.message || 'Download failed');
+    } finally {
+      setDownloading(false);
+    }
+  }, [getDownloadLink, setError]);
+
+  return (
+    <button
+      id="download-btn"
+      type="button"
+      onClick={handleDownload}
+      disabled={downloading}
+      className="flex items-center justify-center gap-2 w-full mt-2 py-2.5 rounded-xl text-sm font-semibold transition-all animate-fade-in"
+      style={{
+        background: downloading ? 'rgba(34,197,94,0.05)' : 'rgba(34,197,94,0.1)',
+        color: '#22c55e',
+        border: '1px solid rgba(34,197,94,0.2)',
+        cursor: downloading ? 'wait' : 'pointer',
+      }}
+    >
+      {downloading ? (
+        <>
+          <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+          </svg>
+          Downloading…
+        </>
+      ) : (
+        <>
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+          </svg>
+          Download
+        </>
+      )}
+    </button>
+  );
+}
 
 const FORMATS = ['mp4', 'mkv', 'mov', 'webm', 'mp3', 'aac', 'wav', 'flac', 'ogg', 'avi', 'm4a'];
 const VIDEO_CODECS = ['copy', 'libx264', 'libx265', 'libvpx-vp9'];
@@ -557,24 +625,7 @@ export default function EditingControls() {
         </button>
 
         {/* Download */}
-        {downloadReady && (
-          <a
-            id="download-btn"
-            href={getDownloadLink()}
-            download
-            className="flex items-center justify-center gap-2 w-full mt-2 py-2.5 rounded-xl text-sm font-semibold transition-all animate-fade-in"
-            style={{
-              background: 'rgba(34,197,94,0.1)',
-              color: '#22c55e',
-              border: '1px solid rgba(34,197,94,0.2)',
-            }}
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
-            </svg>
-            Download
-          </a>
-        )}
+        {downloadReady && <DownloadButton getDownloadLink={getDownloadLink} />}
       </div>
     </div>
   );

@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"sync"
@@ -52,14 +53,15 @@ type jobTask struct {
 }
 
 type Manager struct {
-	mu       sync.RWMutex
-	jobs     map[string]*Job
-	queue    chan *jobTask
-	workers  int
-	done     chan struct{}
-	stopOnce sync.Once
-	wg       sync.WaitGroup
-	handlers map[JobStatus][]JobHandler
+	mu          sync.RWMutex
+	jobs        map[string]*Job
+	queue       chan *jobTask
+	workers     int
+	done        chan struct{}
+	stopOnce    sync.Once
+	wg          sync.WaitGroup
+	handlers    map[JobStatus][]JobHandler
+	persistPath string // path to jobs.json for completed job persistence
 }
 
 type JobHandler func(*Job)
@@ -68,7 +70,6 @@ func NewManager(workers int) *Manager {
 	if workers < 1 {
 		workers = 1
 	}
-	// Queue depth: 4× workers so brief bursts don't reject jobs immediately.
 	return &Manager{
 		jobs:     make(map[string]*Job),
 		queue:    make(chan *jobTask, workers*4),
@@ -76,6 +77,59 @@ func NewManager(workers int) *Manager {
 		done:     make(chan struct{}),
 		handlers: make(map[JobStatus][]JobHandler),
 	}
+}
+
+// WithPersistence sets the path for saving/loading completed jobs.
+func (m *Manager) WithPersistence(path string) *Manager {
+	m.persistPath = path
+	m.loadCompleted()
+	return m
+}
+
+// loadCompleted restores completed jobs from disk on startup.
+func (m *Manager) loadCompleted() {
+	if m.persistPath == "" {
+		return
+	}
+	data, err := os.ReadFile(m.persistPath)
+	if err != nil {
+		return
+	}
+	var saved []*Job
+	if err := json.Unmarshal(data, &saved); err != nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, job := range saved {
+		// Only restore if the output file still exists on disk
+		if job.OutputFilename != "" && job.OutputPath != "" {
+			if _, err := os.Stat(job.OutputPath); err == nil {
+				m.jobs[job.ID] = job
+			}
+		}
+	}
+}
+
+// saveCompleted writes all completed jobs to disk (called after each completion).
+func (m *Manager) saveCompleted() {
+	if m.persistPath == "" {
+		return
+	}
+	m.mu.RLock()
+	var completed []*Job
+	for _, job := range m.jobs {
+		if job.Status == StatusCompleted {
+			clone := cloneJob(job)
+			completed = append(completed, clone)
+		}
+	}
+	m.mu.RUnlock()
+	data, err := json.Marshal(completed)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(m.persistPath, data, 0644)
 }
 
 func (m *Manager) Start() {
@@ -251,8 +305,9 @@ func (m *Manager) SetCompleted(jobID, outputFilename string) {
 	}
 	m.mu.Unlock()
 	if exists {
+		m.saveCompleted()
 		m.callHandlers(job, StatusCompleted)
-		m.scheduleCleanup(jobID, job.OutputPath, time.Hour)
+		m.scheduleCleanup(jobID, job.OutputPath, 24*time.Hour)
 	}
 }
 

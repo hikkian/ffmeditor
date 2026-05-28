@@ -233,15 +233,15 @@ export default function MediaLibrary() {
             {/* Info */}
             <div className="flex-1 min-w-0 overflow-hidden">
               <p className="text-xs font-medium truncate leading-tight" style={{ color: 'var(--color-text-primary)' }}>{file.name}</p>
-              <div className="flex items-center gap-1.5 mt-0.5 overflow-hidden">
-                <span className="text-[10px] flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>{formatDuration(file.duration)}</span>
+              <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                <span className="text-[10px] flex-shrink-0 whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>{formatDuration(file.duration)}</span>
                 <span className="text-[10px] opacity-40 flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>·</span>
-                <span className="text-[10px] flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>{formatFileSize(file.fileSize)}</span>
+                <span className="text-[10px] flex-shrink-0 whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>{formatFileSize(file.fileSize)}</span>
                 {file.width > 0 && (
-                  <span className="text-[10px] flex-shrink-0" style={{ color: '#f59e0b' }}>{file.width}×{file.height}</span>
+                  <span className="text-[10px] flex-shrink-0 whitespace-nowrap font-mono" style={{ color: '#f59e0b' }}>{file.width}×{file.height}</span>
                 )}
                 {file.videoCodec && (
-                  <span className="text-[9px] uppercase font-mono flex-shrink-0 truncate" style={{ color: '#fb923c', maxWidth: 48 }}>{file.videoCodec}</span>
+                  <span className="text-[9px] uppercase font-mono flex-shrink-0 whitespace-nowrap" style={{ color: '#fb923c' }}>{file.videoCodec}</span>
                 )}
               </div>
             </div>

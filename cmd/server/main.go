@@ -34,7 +34,7 @@ func main() {
 	}
 
 	store := storage.NewStorage(cfg.UploadDir)
-	jobManager := jobs.NewManager(cfg.Workers)
+	jobManager := jobs.NewManager(cfg.Workers).WithPersistence(filepath.Join(cfg.OutputDir, "jobs.json"))
 	opStore := metrics.NewOperationStore(filepath.Join(cfg.OutputDir, "operations.json"))
 	jobManager.Start()
 	defer jobManager.Stop()
