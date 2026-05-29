@@ -12,6 +12,8 @@ import (
 type OperationRecord struct {
 	OperationID       string    `json:"operation_id"`
 	Operation         string    `json:"operation"`
+	OriginalName      string    `json:"original_name,omitempty"`
+	OutputFilename    string    `json:"output_filename,omitempty"`
 	ProcessingTimeSec float64   `json:"processing_time_sec"`
 	InputSizeMB       float64   `json:"input_size_mb"`
 	OutputSizeMB      float64   `json:"output_size_mb"`

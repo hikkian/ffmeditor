@@ -345,6 +345,8 @@ func (h *Handler) performConvert(job *jobs.Job, uf *storage.UploadedFile, req *v
 	h.opStore.Record(metrics.OperationRecord{
 		OperationID:       job.ID,
 		Operation:         "convert",
+		OriginalName:      uf.OriginalName,
+		OutputFilename:    outputName,
 		ProcessingTimeSec: elapsed,
 		InputSizeMB:       inMB,
 		OutputSizeMB:      outMB,
@@ -473,6 +475,7 @@ func (h *Handler) performMerge(job *jobs.Job, inputPaths []string, totalDuration
 	h.opStore.Record(metrics.OperationRecord{
 		OperationID:       job.ID,
 		Operation:         "merge",
+		OutputFilename:    outputName,
 		ProcessingTimeSec: elapsed,
 		InputSizeMB:       inMB,
 		OutputSizeMB:      outMB,
@@ -725,6 +728,8 @@ func (h *Handler) performTimelineExport(job *jobs.Job, clips []ffmpeg.TimelineEx
 	h.opStore.Record(metrics.OperationRecord{
 		OperationID:       job.ID,
 		Operation:         "timeline_export",
+		OriginalName:      job.OriginalName,
+		OutputFilename:    outputName,
 		ProcessingTimeSec: elapsed,
 		InputSizeMB:       inMB,
 		OutputSizeMB:      outMB,
