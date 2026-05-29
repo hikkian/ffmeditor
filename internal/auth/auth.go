@@ -37,6 +37,7 @@ func ValidateToken(token, secret string) bool {
 	if err != nil || time.Now().Unix() > exp {
 		return false
 	}
+
 	payload := nonce + "|" + expire
 	return hmac.Equal([]byte(sign(payload, secret)), []byte(mac))
 }
